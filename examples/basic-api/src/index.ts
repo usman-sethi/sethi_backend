@@ -8,151 +8,121 @@ import {
   createMongoDatabaseAdapter,
 } from "@sethi-backend/database-mongodb";
 
-/**
- * Read and validate required environment configuration.
- */
-function requiredEnv(name: string): string {
-  const value = process.env[name]?.trim();
+import { loadAppConfig } from "./config.js";
 
-  if (!value) {
-    throw new Error(
-      `Missing required environment variable: ${name}`,
-    );
+/**
+ * Start the Sethi Backend application.
+ */
+async function main(): Promise<void> {
+  // 1. Load and validate environment configuration.
+  const config = loadAppConfig();
+
+  // 2. Create the MongoDB adapter.
+  const database = createMongoDatabaseAdapter({
+    uri: config.mongodb.uri,
+    databaseName: config.mongodb.databaseName,
+  });
+
+  // 3. Create the Fastify adapter.
+  const http = createFastifyAdapter({
+    logger: config.environment !== "test",
+  });
+
+  // 4. Register the health endpoint.
+  http.instance.get("/health", async () => {
+    return {
+      status: "ok",
+      service: "sethi-backend",
+      uptimeSeconds: Math.floor(process.uptime()),
+    };
+  });
+
+  // 5. Register the database readiness endpoint.
+  http.instance.get("/ready", async (_request, reply) => {
+    try {
+      await database.getDatabase().command({
+        ping: 1,
+      });
+
+      return reply.code(200).send({
+        status: "ready",
+        database: "reachable",
+      });
+    } catch {
+      return reply.code(503).send({
+        status: "not_ready",
+        database: "unavailable",
+      });
+    }
+  });
+
+  // 6. Compose the application.
+  const app = createBackend({
+    server: config.server,
+    adapter: http,
+    database,
+  });
+
+  let shuttingDown = false;
+
+  /**
+   * Graceful shutdown handler.
+   */
+  async function shutdown(signal: string): Promise<void> {
+    if (shuttingDown) {
+      return;
+    }
+
+    shuttingDown = true;
+
+    console.log(`Received ${signal}. Shutting down...`);
+
+    try {
+      await app.stop();
+
+      console.log("Sethi Backend stopped successfully.");
+    } catch (error) {
+      console.error("Shutdown failed:", error);
+
+      process.exitCode = 1;
+    }
   }
 
-  return value;
-}
-
-/**
- * Read and validate the server port.
- */
-function readPort(): number {
-  const value = Number(process.env.PORT ?? 3000);
-
-  if (
-    !Number.isInteger(value) ||
-    value < 1 ||
-    value > 65535
-  ) {
-    throw new Error(
-      "PORT must be an integer between 1 and 65535.",
-    );
-  }
-
-  return value;
-}
-
-const host = process.env.HOST?.trim() || "127.0.0.1";
-const port = readPort();
-
-const mongoUri = requiredEnv("MONGODB_URI");
-const databaseName = requiredEnv("MONGODB_DATABASE");
-
-/**
- * Create infrastructure adapters.
- */
-const database = createMongoDatabaseAdapter({
-  uri: mongoUri,
-  databaseName,
-});
-
-const http = createFastifyAdapter({
-  logger: true,
-});
-
-/**
- * Liveness endpoint.
- *
- * This checks whether the HTTP application is responding.
- */
-http.instance.get("/health", async () => {
-  return {
-    status: "ok",
-    service: "sethi-backend",
-    uptimeSeconds: Math.floor(process.uptime()),
+  const handleSigint = (): void => {
+    void shutdown("SIGINT");
   };
-});
 
-/**
- * Readiness endpoint.
- *
- * This checks whether MongoDB can respond to a ping.
- */
-http.instance.get("/ready", async (_request, reply) => {
+  const handleSigterm = (): void => {
+    void shutdown("SIGTERM");
+  };
+
+  process.once("SIGINT", handleSigint);
+  process.once("SIGTERM", handleSigterm);
+
+  // 7. Start the application.
   try {
-    await database.getDatabase().command({
-      ping: 1,
-    });
+    await app.start();
 
-    return reply.code(200).send({
-      status: "ready",
-      database: "reachable",
-    });
-  } catch {
-    return reply.code(503).send({
-      status: "not_ready",
-      database: "unavailable",
-    });
-  }
-});
-
-/**
- * Compose the application.
- */
-const app = createBackend({
-  server: {
-    host,
-    port,
-  },
-
-  adapter: http,
-  database,
-});
-
-/**
- * Graceful shutdown.
- */
-let shuttingDown = false;
-
-async function shutdown(signal: string): Promise<void> {
-  if (shuttingDown) {
-    return;
-  }
-
-  shuttingDown = true;
-
-  console.log(`Received ${signal}. Shutting down...`);
-
-  try {
-    await app.stop();
-
-    console.log("Sethi Backend stopped successfully.");
+    console.log(
+      `Sethi Backend listening at http://${config.server.host}:${config.server.port}`,
+    );
   } catch (error) {
-    console.error("Shutdown failed:", error);
+    process.off("SIGINT", handleSigint);
+    process.off("SIGTERM", handleSigterm);
 
-    process.exitCode = 1;
+    throw error;
   }
 }
 
-process.once("SIGINT", () => {
-  void shutdown("SIGINT");
-});
-
-process.once("SIGTERM", () => {
-  void shutdown("SIGTERM");
-});
-
 /**
- * Start the application.
+ * Handle configuration and startup failures.
  */
-try {
-  await app.start();
+await main().catch((error: unknown) => {
+  console.error("Failed to start Sethi Backend.");
 
-  console.log(
-    `Sethi Backend listening at http://${host}:${port}`,
+  console.error(
+    error instanceof Error ? error.message : error,
   );
-} catch (error) {
-  console.error("Failed to start Sethi Backend:", error);
 
   process.exitCode = 1;
-}
+});

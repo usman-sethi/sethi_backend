@@ -178,12 +178,18 @@ importers:
       '@sethi-backend/adapter-fastify':
         specifier: workspace:*
         version: link:../../packages/adapter-fastify
+      '@sethi-backend/config':
+        specifier: workspace:*
+        version: link:../../packages/config
       '@sethi-backend/core':
         specifier: workspace:*
         version: link:../../packages/core
       '@sethi-backend/database-mongodb':
         specifier: workspace:*
         version: link:../../packages/database-mongodb
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
     devDependencies:
       '@types/node':
         specifier: ^20.19.43
@@ -197,6 +203,12 @@ importers:
       fastify:
         specifier: ^5.12.8
         version: 5.12.8
+
+  packages/config:
+    dependencies:
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
 
   packages/core: {}
 
@@ -955,6 +967,9 @@ packages:
     engines: {node: '>=20.11'}
     hasBin: true
 
+  zod@4.6.7:
+    resolution: {integrity: sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==}
+
 snapshots:
 
   '@fastify/ajv-compiler@4.0.7':
@@ -1493,3 +1508,5 @@ snapshots:
       webidl-conversions: 7.0.0
 
   why-is-node-running@3.2.1: {}
+
+  zod@4.6.7: {}

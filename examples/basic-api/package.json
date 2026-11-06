@@ -9,8 +9,10 @@
   },
   "dependencies": {
     "@sethi-backend/adapter-fastify": "workspace:*",
+    "@sethi-backend/config": "workspace:*",
     "@sethi-backend/core": "workspace:*",
-    "@sethi-backend/database-mongodb": "workspace:*"
+    "@sethi-backend/database-mongodb": "workspace:*",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^20.19.43"

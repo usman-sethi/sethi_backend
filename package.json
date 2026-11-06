@@ -5,7 +5,7 @@
   "description": "A modular TypeScript backend framework.",
   "license": "MIT",
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=26.0.0"
   },
 "packageManager": "pnpm@12.18.0",
   "scripts": {

@@ -1,0 +1,323 @@
+<div align="center">
+
+# Sethi Backend
+
+  <p><strong>An evolving modular TypeScript backend framework built with independent infrastructure adapters.</strong></p>
+  <p>Separating the application lifecycle from HTTP servers and database implementations.</p>
+
+  <p>
+    <a href="https://github.com/usman-sethi/sethi_backend"><img src="https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen?style=flat-square&logo=nodedotjs&logoColor=white" alt="Node.js Version"></a>
+    <a href="https://github.com/usman-sethi/sethi_backend"><img src="https://img.shields.io/badge/typescript-%5E5.0-blue?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript"></a>
+    <a href="https://github.com/usman-sethi/sethi_backend"><img src="https://img.shields.io/badge/pnpm-%3E%3D8.0.0-orange?style=flat-square&logo=pnpm&logoColor=white" alt="pnpm"></a>
+    <a href="https://github.com/usman-sethi/sethi_backend"><img src="https://img.shields.io/badge/fastify-v4.x-black?style=flat-square&logo=fastify&logoColor=white" alt="Fastify"></a>
+    <a href="https://github.com/usman-sethi/sethi_backend"><img src="https://img.shields.io/badge/mongodb-v6.x-green?style=flat-square&logo=mongodb&logoColor=white" alt="MongoDB"></a>
+    <a href="https://github.com/usman-sethi/sethi_backend"><img src="https://img.shields.io/badge/tests-12%20passing-success?style=flat-square&logo=vitest&logoColor=white" alt="Tests"></a>
+  </p>
+
+  <p>
+    <a href="#-about-sethi-backend">About</a> &bull;
+    <a href="#-current-development-status">Status</a> &bull;
+    <a href="#-architecture">Architecture</a> &bull;
+    <a href="#-getting-started">Getting Started</a> &bull;
+    <a href="#-api-endpoints">API Endpoints</a> &bull;
+    <a href="#-testing">Testing</a> &bull;
+    <a href="#-roadmap">Roadmap</a>
+  </p>
+
+</div>
+
+---
+
+## About Sethi Backend
+
+**Sethi Backend** is a modular TypeScript backend framework engineered to provide a clean, decoupled foundation for building backend applications. By strictly separating the application lifecycle from infrastructure concerns—such as HTTP server frameworks and database drivers—Sethi Backend prevents tight coupling and ensures high testability, maintainability, and architectural longevity.
+
+### Why Sethi Backend?
+* **Decoupled Architecture:** Business logic and lifecycle management are completely independent of specific web frameworks (like Fastify) or persistence layers (like MongoDB).
+* **Adapter Pattern:** Infrastructure is plugged in through rigorous TypeScript contracts (`@sethi-backend/*`), allowing components to be swapped or mocked effortlessly.
+* **Monorepo Agility:** Built with `pnpm workspaces`, enabling clean separation of concerns across core modules, adapters, and example applications.
+* **Robust Lifecycle Management:** Unified startup, liveness, readiness, and graceful shutdown sequencing out of the box.
+
+---
+
+## Current Development Status
+
+Sethi Backend is currently in active development. The foundational milestone is complete, featuring a fully integrated basic API example.
+
+| Category | Status | Capabilities |
+| :--- | :--- | :--- |
+| **Monorepo & Core** | ✅ Implemented | pnpm workspace setup, core engine lifecycle, HTTP/database adapter contracts, automated tests. |
+| **HTTP Layer** | ✅ Implemented | Fastify server adapter, request/response lifecycle integration. |
+| **Database Layer** | ✅ Implemented | MongoDB adapter, connection management, readiness probes (`/ready`). |
+| **Observability** | ✅ Implemented | `/health` liveness endpoint, `/ready` database check, structured graceful shutdown. |
+| **Security & Auth** | 🚧 Planned | Zod environment validation, Argon2id password hashing, JWT token architecture, CORS, rate-limiting. |
+| **Developer Tooling** | 🚧 Planned | CLI code generators, project scaffolding, advanced documentation & release automation. |
+
+---
+
+## Technology Stack
+
+The framework leverages modern, high-performance tooling built for type safety and developer velocity:
+
+* **Language:** TypeScript (^5.x)
+* **Package Manager:** pnpm Workspaces
+* **HTTP Framework:** Fastify
+* **Database Driver:** MongoDB Node.js Driver
+* **Testing Framework:** Vitest
+* **Runtime:** Node.js (>=20.0.0)
+
+---
+
+## Architecture
+
+Sethi Backend organizes code into decoupled workspace packages under `packages/` and functional examples under `examples/`.
+
+```text
+sethi_backend/
+│
+├── packages/
+│   ├── core/                  # Application lifecycle and adapter contracts
+│   ├── adapter-fastify/       # Fastify HTTP server implementation
+│   └── database-mongodb/      # MongoDB connection and client manager
+│
+├── examples/
+│   └── basic-api/             # Integrated sample application
+│
+├── .env.example
+├── pnpm-workspace.yaml
+├── tsconfig.base.json
+└── package.json
+```
+
+### Package Responsibilities
+* **`@sethi-backend/core`**: Defines abstract contracts for servers and databases, managing the overarching application startup and shutdown lifecycle.
+* **`@sethi-backend/adapter-fastify`**: Implements the server contract using Fastify, translating HTTP requests and routing lifecycle hooks.
+* **`@sethi-backend/database-mongodb`**: Implements the database contract, handling MongoDB connections, client pooling, and health pinging.
+* **`@sethi-backend/example-basic-api`**: Demonstrates how to wire core services, Fastify, and MongoDB together into a runnable backend application.
+
+### Dependency Flow Diagram
+
+```mermaid
+graph TD
+    A[Basic API Application] --> B[Sethi Backend Core]
+    B --> C[Fastify Adapter]
+    B --> D[MongoDB Adapter]
+    C --> E[HTTP Server / Fastify]
+    D --> F[MongoDB Database]
+
+    style A fill:#1e1e2e,stroke:#89b4fa,stroke-width:2px,color:#cdd6f4
+    style B fill:#1e1e2e,stroke:#a6e3a1,stroke-width:2px,color:#cdd6f4
+    style C fill:#1e1e2e,stroke:#fab387,stroke-width:2px,color:#cdd6f4
+    style D fill:#1e1e2e,stroke:#fab387,stroke-width:2px,color:#cdd6f4
+    style E fill:#181825,stroke:#f38ba8,stroke-width:1px,color:#cdd6f4
+    style F fill:#181825,stroke:#f38ba8,stroke-width:1px,color:#cdd6f4
+```
+
+---
+
+## Lifecycle Sequence
+
+The startup and graceful shutdown sequences guarantee predictable initialization and resource release across infrastructure components.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant App as Basic API Application
+    participant Core as Sethi Backend Core
+    participant DB as MongoDB Adapter
+    participant HTTP as Fastify Adapter
+
+    Note over App, HTTP: Startup Sequence
+    App->>Core: Initialize Application
+    Core->>DB: Connect to MongoDB
+    DB-->>Core: Connection Established
+    Core->>HTTP: Start HTTP Server
+    HTTP-->>Core: Server Listening
+    Core-->>App: Application Ready (Accepting Requests)
+
+    Note over App, HTTP: Shutdown Sequence (SIGINT / SIGTERM)
+    App->>Core: Trigger Shutdown
+    Core->>HTTP: Stop HTTP Server
+    HTTP-->>Core: Server Closed
+    Core->>DB: Disconnect MongoDB
+    DB-->>Core: Connection Terminated
+    Core-->>App: Safe Exit
+```
+
+---
+
+## Getting Started
+
+### Prerequisites
+* **Node.js**: `>=20.0.0`
+* **pnpm**: `>=8.0.0`
+* **MongoDB**: Local installation running on `mongodb://127.0.0.1:27017` or a reachable MongoDB Atlas instance.
+
+### 1. Clone the Repository
+```bash
+git clone https://github.com/usman-sethi/sethi_backend.git
+cd sethi_backend
+```
+
+### 2. Install Dependencies
+```bash
+pnpm install
+```
+
+### 3. Configure Environment Variables
+Copy the example environment configuration file:
+
+* **PowerShell (Windows):**
+  ```powershell
+  Copy-Item .env.example .env
+  ```
+* **Bash (Linux/macOS):**
+  ```bash
+  cp .env.example .env
+  ```
+
+Ensure your `.env` file is configured correctly:
+```env
+HOST=127.0.0.1
+PORT=3000
+MONGODB_URI=mongodb://127.0.0.1:27017
+MONGODB_DATABASE=sethi_backend_dev
+```
+
+> **Note:** Ensure your MongoDB instance is active and reachable before starting the application. Never commit real database credentials or production secrets to version control.
+
+---
+
+## Building the Project
+
+Compile all workspace packages in dependency order:
+```bash
+pnpm build
+```
+
+To build individual workspace packages separately:
+```bash
+pnpm --filter @sethi-backend/core build
+pnpm --filter @sethi-backend/adapter-fastify build
+pnpm --filter @sethi-backend/database-mongodb build
+pnpm --filter @sethi-backend/example-basic-api build
+```
+
+---
+
+## Running the Example Application
+
+Start the integrated basic API example in development mode:
+```bash
+pnpm --filter @sethi-backend/example-basic-api start
+```
+
+The server will initialize at:
+`http://127.0.0.1:3000`
+
+---
+
+## API Endpoints
+
+The basic API example exposes standard health and readiness monitoring endpoints:
+
+| Method | Endpoint | Purpose |
+| :--- | :--- | :--- |
+| `GET` | `/health` | Application liveness check |
+| `GET` | `/ready` | MongoDB database readiness check |
+
+### Response Examples
+
+* **`/health` (Liveness)**
+  ```json
+  {
+    "status": "ok",
+    "service": "sethi-backend",
+    "uptimeSeconds": 12
+  }
+  ```
+
+* **`/ready` (Readiness)**
+  ```json
+  {
+    "status": "ready",
+    "database": "reachable"
+  }
+  ```
+  > *Note: `/ready` returns HTTP status `503 Service Unavailable` if the MongoDB database connection is dropped or unreachable.*
+
+---
+
+## Testing
+
+Run the test suite across all workspace packages via Vitest:
+```bash
+pnpm test
+```
+
+### Verified Test Suites (12 Passing Tests)
+* **Core Lifecycle:** 4 tests covering application startup and lifecycle hooks.
+* **Fastify Adapter:** 3 tests validating server routing and endpoint responses.
+* **MongoDB Adapter:** 5 tests verifying connection management and health checks (using driver mocks).
+
+> *The basic API example has also been verified against live running MongoDB instances.*
+
+---
+
+## Graceful Shutdown
+
+Sethi Backend listens for termination signals (`SIGINT` and `SIGTERM`). Upon receiving a signal (e.g., pressing `Ctrl + C`), the application executes a structured teardown:
+1. Stops accepting new HTTP requests and closes the Fastify server.
+2. Gracefully disconnects active MongoDB client pools.
+3. Exits cleanly with status code `0`.
+
+---
+
+## Project Roadmap
+
+- [x] **Milestone 1 — Foundation** *(Completed)*
+  - Core lifecycle engine
+  - Fastify HTTP adapter
+  - MongoDB database adapter
+  - Basic API reference application
+- [ ] **Milestone 2 — Configuration & Security** *(Planned)*
+  - Zod-based environment validation
+  - Argon2id password hashing primitives
+  - JWT token architecture
+  - CORS and secure cookie management
+- [ ] **Milestone 3 — Authentication Engine** *(Planned)*
+  - User registration & login flows
+  - Refresh token rotation
+  - Session management & test suites
+- [ ] **Milestone 4 — Advanced Auth & RBAC** *(Planned)*
+  - Email verification & password reset
+  - Role-based access control (RBAC)
+  - Security integration testing
+- [ ] **Milestone 5 — Developer CLI** *(Planned)*
+  - Project initialization CLI (`sethi init`)
+  - Code generators & templates
+  - System diagnostics
+- [ ] **Milestone 6 — Release Preparation** *(Planned)*
+  - Comprehensive integration testing
+  - Production hardening & documentation
+  - Package publishing pipeline
+
+---
+
+## Development
+
+Developers can explore and modify workspace packages:
+* **Run tests in watch mode:** `pnpm --filter @sethi-backend/core test`
+* **Adding an Adapter:** Create a new package under `packages/` implementing the respective core contract interface (`ServerAdapter` or `DatabaseAdapter`).
+
+---
+
+## Contributing
+
+Contributions, feature proposals, and bug reports are welcome. Please open an issue or submit a pull request on GitHub for discussion before introducing major architectural modifications.
+
+---
+
+## License
+
+This project is licensed under the terms specified in the repository. Refer to the repository root for license details.

@@ -1,0 +1,21 @@
+{
+  "name": "sethi-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A modular TypeScript backend framework.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "packageManager": "pnpm@10",
+  "scripts": {
+    "build": "pnpm --recursive --if-present build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "clean": "pnpm --recursive --if-present clean"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}

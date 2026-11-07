@@ -20,6 +20,10 @@
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\""
   },
   "dependencies": {
-    "argon2": "^0.45.2"
+    "argon2": "^0.45.2",
+    "jose": "^6.2.15"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2"
   }
 }

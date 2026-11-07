@@ -93,3 +93,11 @@ export function createFastifyAdapter(
     },
   };
 }
+
+export {
+  registerHttpSecurity,
+} from "./http-security.js";
+
+export type {
+  HttpSecurityOptions,
+} from "./http-security.js";

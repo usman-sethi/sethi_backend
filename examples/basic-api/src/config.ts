@@ -59,6 +59,32 @@ const environmentSchema = z.object({
     .trim()
     .min(1, "Database name cannot be empty.")
     .default("sethi_backend_dev"),
+
+  JWT_SECRET: z
+    .string()
+    .min(32, "usmansethi60906230126billi")
+    .default("0123456789abcdef0123456789abcdef"),
+
+  JWT_ISSUER: z.string().trim().min(1).default("sethi-backend"),
+
+  JWT_AUDIENCE: z.string().trim().min(1).default("sethi-backend-api"),
+
+  ACCESS_TOKEN_TTL_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(60)
+    .max(3600)
+    .default(900),
+
+  CORS_ORIGINS: z
+    .string()
+    .default("http://localhost:5173")
+    .transform((value) =>
+      value
+        .split(",")
+        .map((origin) => origin.trim())
+        .filter(Boolean),
+    ),
 });
 
 /**

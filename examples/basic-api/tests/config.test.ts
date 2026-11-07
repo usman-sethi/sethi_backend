@@ -8,6 +8,9 @@ import { loadAppConfig } from "../src/config.js";
 
 const validMongoUri = "mongodb://127.0.0.1:27017";
 
+const testJwtSecret =
+  "test-only-secret-0123456789abcdef-0123456789abcdef";
+  
 describe("Application Configuration", () => {
   it("should apply default configuration values", () => {
     const config = loadAppConfig({
@@ -36,6 +39,7 @@ describe("Application Configuration", () => {
       PORT: "8080",
       MONGODB_URI: validMongoUri,
       MONGODB_DATABASE: "production_db",
+      JWT_SECRET: testJwtSecret,
     });
 
     expect(config).toEqual({

@@ -107,6 +107,9 @@ describe("Fastify HTTP security", () => {
     expect(allowedResponse.headers["access-control-allow-credentials"]).toBe(
       "true",
     );
+    expect(allowedResponse.headers["access-control-expose-headers"]).toContain(
+      "X-Request-Id",
+    );
     expect(
       allowedResponse.headers["cross-origin-resource-policy"],
     ).toBeUndefined();

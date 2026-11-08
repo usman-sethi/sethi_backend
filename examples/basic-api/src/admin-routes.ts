@@ -38,60 +38,78 @@ export interface RegisterAdminRoutesOptions {
 
 function sendFailure(
   server: FastifyInstance,
-  reply: { code(statusCode: number): { send(payload?: unknown): unknown } },
+  reply: {
+    request: { id: string };
+    code(statusCode: number): { send(payload?: unknown): unknown };
+  },
   error: unknown,
 ): unknown {
+  const requestId = reply.request.id;
+  const errorName = error instanceof Error ? error.name : "UnknownError";
+  const safeName = /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(errorName)
+    ? errorName
+    : "Error";
+
   if (error instanceof UnauthorizedError) {
     return reply.code(401).send({
-      error: { code: error.code, message: error.message },
+      error: { code: error.code, message: error.message, requestId },
     });
   }
   if (error instanceof ForbiddenError) {
     return reply.code(403).send({
-      error: { code: error.code, message: error.message },
+      error: { code: error.code, message: error.message, requestId },
     });
   }
   if (error instanceof UserNotFoundError) {
     return reply.code(404).send({
-      error: { code: error.code, message: error.message },
+      error: { code: error.code, message: error.message, requestId },
     });
   }
   if (error instanceof LastAdministratorError) {
     return reply.code(409).send({
-      error: { code: error.code, message: error.message },
+      error: { code: error.code, message: error.message, requestId },
     });
   }
   if (error instanceof UnverifiedUserError) {
     return reply.code(409).send({
-      error: { code: error.code, message: error.message },
+      error: { code: error.code, message: error.message, requestId },
     });
   }
   if (error instanceof ZodError) {
     return reply.code(400).send({
-      error: { code: "AUTH_VALIDATION", message: "Role input is invalid." },
+      error: {
+        code: "AUTH_VALIDATION",
+        message: "Role input is invalid.",
+        requestId,
+      },
     });
   }
   if (error instanceof AuthValidationError) {
     return reply.code(400).send({
-      error: { code: error.code, message: error.message },
+      error: { code: error.code, message: error.message, requestId },
     });
   }
   if (error instanceof AuthRepositoryError) {
     server.log.error(
-      { event: "admin.request.failed", errorName: error.name },
+      { event: "admin.request.failed", requestId, errorName: safeName },
       "Administrative storage operation failed",
     );
   } else {
     server.log.error(
       {
         event: "admin.request.failed",
-        errorName: error instanceof Error ? error.name : "UnknownError",
+        requestId,
+        errorName: safeName,
       },
       "Administrative request failed",
     );
   }
   return reply.code(500).send({
-    error: { code: "INTERNAL_ERROR", message: "Request failed." },
+    error: {
+      code: "INTERNAL_ERROR",
+      message: "Request failed.",
+      requestId,
+    },
   });
 }
 

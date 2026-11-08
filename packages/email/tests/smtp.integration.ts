@@ -32,7 +32,7 @@ function required(value: string | undefined, field: string): string {
 }
 
 describe.skipIf(!enabled)("Opt-in SMTP smoke test", () => {
-  it("sends a test message only to TEST_SMTP_RECIPIENT", async () => {
+  it("sends verification and password-reset fixtures only to TEST_SMTP_RECIPIENT", async () => {
     const sender = createSmtpEmailSender({
       host: required(host, "SMTP_HOST"),
       port,
@@ -40,12 +40,24 @@ describe.skipIf(!enabled)("Opt-in SMTP smoke test", () => {
       from: required(from, "EMAIL_FROM"),
       ...(username && password ? { username, password } : {}),
     });
-    await sender.send({
-      to: required(recipient, "TEST_SMTP_RECIPIENT"),
-      subject: "Sethi Backend SMTP smoke test",
-      text: "This message verifies the configured SMTP integration.",
-      html: "<p>This message verifies the configured SMTP integration.</p>",
-    });
+    const testRecipient = required(recipient, "TEST_SMTP_RECIPIENT");
+    const messages = [
+      {
+        to: testRecipient,
+        subject: "Sethi Backend email verification smoke test",
+        text: "Verify your address: https://example.test/verify-email#token=test-verification-token",
+        html: '<p><a href="https://example.test/verify-email#token=test-verification-token">Verify email</a></p>',
+      },
+      {
+        to: testRecipient,
+        subject: "Sethi Backend password reset smoke test",
+        text: "Reset your password: https://example.test/reset-password#token=test-reset-token",
+        html: '<p><a href="https://example.test/reset-password#token=test-reset-token">Reset password</a></p>',
+      },
+    ] as const;
+    for (const message of messages) {
+      await sender.send(message);
+    }
     expect(recipient).toBe(required(process.env.TEST_SMTP_RECIPIENT?.trim(), "TEST_SMTP_RECIPIENT"));
   });
 });

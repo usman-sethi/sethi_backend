@@ -10,6 +10,8 @@ const validMongoUri = "mongodb://127.0.0.1:27017";
 
 const testJwtSecret =
   "test-only-secret-0123456789abcdef-0123456789";
+const productionJwtSecret =
+  "8X!q4m#Zp2V$w7K@e5R!n3L&b9C^s6TQ";
 
 describe("Application Configuration", () => {
   it("should apply default configuration values", () => {
@@ -58,7 +60,10 @@ describe("Application Configuration", () => {
       MONGODB_URI: validMongoUri,
       MONGODB_DATABASE: "production_db",
       CORS_ORIGINS: "https://frontend.example",
-      JWT_SECRET: testJwtSecret,
+      JWT_SECRET: productionJwtSecret,
+      SMTP_HOST: "smtp.example.com",
+      EMAIL_FROM: "no-reply@example.com",
+      APP_BASE_URL: "https://frontend.example",
     });
 
     expect(config).toEqual({
@@ -79,18 +84,60 @@ describe("Application Configuration", () => {
       },
 
       tokens: {
-        secret: testJwtSecret,
+        secret: productionJwtSecret,
         issuer: "sethi-backend",
         audience: "sethi-backend-api",
         accessTokenTtlSeconds: 900,
       },
       email: {
-        appBaseUrl: undefined,
+        appBaseUrl: "https://frontend.example",
         emailVerificationTokenTtlSeconds: 86400,
         passwordResetTokenTtlSeconds: 1800,
-        smtp: undefined,
+        smtp: {
+          host: "smtp.example.com",
+          port: 587,
+          secure: false,
+          requireTLS: true,
+          from: "no-reply@example.com",
+        },
       },
     });
+  });
+
+  it("requires explicit production origins, database, SMTP, and a non-placeholder secret", () => {
+    const productionBase = {
+      NODE_ENV: "production",
+      MONGODB_URI: validMongoUri,
+      MONGODB_DATABASE: "production_db",
+      CORS_ORIGINS: "https://frontend.example",
+      JWT_SECRET: productionJwtSecret,
+      SMTP_HOST: "smtp.example.com",
+      EMAIL_FROM: "no-reply@example.com",
+      APP_BASE_URL: "https://frontend.example",
+    };
+
+    expect(() => loadAppConfig({
+      ...productionBase,
+      JWT_SECRET: "replace-with-a-random-secret-at-least-32-bytes-long",
+    })).toThrow("placeholder or repetitive");
+
+    expect(() => loadAppConfig({
+      ...productionBase,
+      CORS_ORIGINS: undefined,
+    })).toThrow("explicit CORS_ORIGINS");
+
+    expect(() => loadAppConfig({
+      ...productionBase,
+      MONGODB_DATABASE: "sethi_backend_dev",
+    })).toThrow("non-development MONGODB_DATABASE");
+
+    expect(() => loadAppConfig({
+      NODE_ENV: "production",
+      MONGODB_URI: validMongoUri,
+      MONGODB_DATABASE: "production_db",
+      CORS_ORIGINS: "https://frontend.example",
+      JWT_SECRET: productionJwtSecret,
+    })).toThrow("SMTP_HOST");
   });
 
   it("should normalize and validate configured CORS origins", () => {

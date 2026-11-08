@@ -6,7 +6,10 @@ import {
 
 import { z } from "zod";
 
-import { loadConfig } from "../src/index.js";
+import {
+  ConfigValidationError,
+  loadConfig,
+} from "../src/index.js";
 
 describe("Configuration Loader", () => {
   it("should validate and transform configuration", () => {
@@ -45,11 +48,13 @@ describe("Configuration Loader", () => {
       PORT: z.coerce.number().int().min(1).max(65535),
     });
 
-    expect(() =>
-      loadConfig(schema, {
-        PORT: "70000",
-      }),
-    ).toThrow("PORT");
+    try {
+      loadConfig(schema, { PORT: "70000" });
+      throw new Error("Expected invalid config to throw.");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigValidationError);
+      expect(error).toHaveProperty("message", expect.stringContaining("PORT"));
+    }
   });
 
   it("should not expose secret values in validation errors", () => {

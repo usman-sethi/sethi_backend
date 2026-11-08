@@ -1195,7 +1195,7 @@ describe("Basic API auth routes", () => {
 
       expect(registration.statusCode).toBe(202);
       expect(response.statusCode).toBe(500);
-      expect(response.json()).toEqual({
+      expect(response.json()).toMatchObject({
         error: {
           code: "INTERNAL_ERROR",
           message: "Authentication request failed.",

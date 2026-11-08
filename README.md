@@ -50,7 +50,7 @@ Sethi Backend is currently in active development. The foundational milestone is 
 | **HTTP Layer** | ✅ Implemented | Fastify server adapter, request/response lifecycle integration. |
 | **Database Layer** | ✅ Implemented | MongoDB adapter, connection management, readiness probes (`/ready`). |
 | **Observability** | ✅ Implemented | `/health` liveness endpoint, `/ready` database check, structured graceful shutdown. |
-| **Security & Auth** | 🚧 In progress | Environment validation, Argon2id and JWT primitives, Fastify HTTP security (Helmet, strict CORS, cookies, route-level rate limits and CSRF utilities). Authentication flows remain planned. |
+| **Security & Auth** | ✅ Implemented | Environment validation, Argon2id password hashing, JWT access tokens, persistent MongoDB sessions with refresh-token rotation/revocation, HttpOnly refresh cookies, CSRF protection, strict CORS and route-level rate limits. |
 | **Developer Tooling** | 🚧 Planned | CLI code generators, project scaffolding, advanced documentation & release automation. |
 
 ---
@@ -182,9 +182,15 @@ HOST=127.0.0.1
 PORT=3000
 MONGODB_URI=mongodb://127.0.0.1:27017
 MONGODB_DATABASE=sethi_backend_dev
+JWT_SECRET=<unique random secret of at least 32 bytes>
 ```
 
-> **Note:** Ensure your MongoDB instance is active and reachable before starting the application. Never commit real database credentials or production secrets to version control.
+Generate a secret rather than using the placeholder:
+
+* **PowerShell:** `[Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(48))`
+* **OpenSSL:** `openssl rand -base64 48`
+
+> **Note:** Ensure your MongoDB instance is active and reachable before starting the application. Never use the example placeholder in production or commit real database credentials or production secrets.
 
 ---
 
@@ -219,13 +225,35 @@ The server will initialize at:
 
 ## API Endpoints
 
-The basic API example exposes health, readiness, and CSRF-token endpoints:
+The basic API example exposes health, readiness, CSRF-token, and authentication
+endpoints:
 
 | Method | Endpoint | Purpose |
 | :--- | :--- | :--- |
 | `GET` | `/health` | Application liveness check |
 | `GET` | `/ready` | MongoDB database readiness check |
 | `GET` | `/csrf-token` | Creates a CSRF token for a cookie-authenticated client |
+| `POST` | `/auth/register` | Register, create a persistent session, and return an access token |
+| `POST` | `/auth/login` | Authenticate and create a separate device session |
+| `POST` | `/auth/refresh` | Rotate the refresh token and issue a new access token |
+| `POST` | `/auth/logout` | Revoke the current refresh-token session |
+| `POST` | `/auth/logout-all` | Revoke every active session for the authenticated user |
+| `GET` | `/auth/me` | Return the authenticated user's public profile |
+
+Authentication POST requests require a CSRF token and cookie. Fetch
+`GET /csrf-token`, retain its cookie, and send the returned value in
+`X-CSRF-Token`. Registration and login return the access token and public user
+in JSON; refresh tokens are sent only as HttpOnly, SameSite=Lax cookies scoped
+to `/auth`. Access tokens are bound to persistent sessions, and a revoked or
+expired session invalidates its access tokens. Refresh tokens rotate on every
+refresh, and session records persist only their SHA-256 hashes. The default
+session lifetime is 30 days; MongoDB TTL cleanup is asynchronous.
+If registration succeeds in creating a user but session creation fails, that
+user record remains and can sign in later.
+
+Use the access token as a bearer token for `/auth/me` and `/auth/logout-all`.
+The logout-all endpoint also requires a CSRF token because browser clients may
+send the refresh cookie.
 
 ### Response Examples
 
@@ -298,9 +326,11 @@ pnpm test
 
 ### Test coverage
 The Vitest suite covers core lifecycle behavior, HTTP security and CORS, config
-validation, password/token utilities, and MongoDB adapter behavior.
+validation, password/token utilities, authentication routes, session behavior,
+and mocked MongoDB repository operations.
 
-> *The basic API example has also been verified against live running MongoDB instances.*
+The authentication repository tests use mocks; they do not claim a live
+MongoDB integration test.
 
 ---
 
@@ -320,12 +350,12 @@ Sethi Backend listens for termination signals (`SIGINT` and `SIGTERM`). Upon rec
   - Fastify HTTP adapter
   - MongoDB database adapter
   - Basic API reference application
-- [ ] **Milestone 2 — Configuration & Security** *(Planned)*
+- [x] **Milestone 2 — Configuration & Security** *(Completed)*
   - Zod-based environment validation
   - Argon2id password hashing primitives
   - JWT token architecture
   - CORS and secure cookie management
-- [ ] **Milestone 3 — Authentication Engine** *(Planned)*
+- [x] **Milestone 3 — Authentication Engine** *(Completed)*
   - User registration & login flows
   - Refresh token rotation
   - Session management & test suites

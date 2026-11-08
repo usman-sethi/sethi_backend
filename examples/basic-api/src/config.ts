@@ -65,8 +65,7 @@ const environmentSchema = z.object({
 
   JWT_SECRET: z
     .string()
-    .min(32, "usmansethi60906230126billi")
-    .default("0123456789abcdef0123456789abcdef"),
+    .min(32, "JWT_SECRET must contain at least 32 characters."),
 
   JWT_ISSUER: z.string().trim().min(1).default("sethi-backend"),
 
@@ -113,6 +112,13 @@ export function loadAppConfig(
     mongodb: {
       uri: env.MONGODB_URI,
       databaseName: env.MONGODB_DATABASE,
+    },
+
+    tokens: {
+      secret: env.JWT_SECRET,
+      issuer: env.JWT_ISSUER,
+      audience: env.JWT_AUDIENCE,
+      accessTokenTtlSeconds: env.ACCESS_TOKEN_TTL_SECONDS,
     },
 
     httpSecurity: {

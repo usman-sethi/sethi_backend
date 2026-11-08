@@ -15,12 +15,13 @@ export interface TokenServiceOptions {
 
 export interface VerifiedAccessToken {
   subject: string;
+  sessionId?: string;
   issuedAt: number;
   expiresAt: number;
 }
 
 export interface TokenService {
-  createAccessToken(userId: string): Promise<string>;
+  createAccessToken(userId: string, sessionId?: string): Promise<string>;
   verifyAccessToken(token: string): Promise<VerifiedAccessToken | null>;
   createRefreshToken(): string;
   hashRefreshToken(token: string): string;
@@ -50,16 +51,28 @@ export function createTokenService(
   const secret = new TextEncoder().encode(options.secret);
 
   return {
-    async createAccessToken(userId: string): Promise<string> {
+    async createAccessToken(
+      userId: string,
+      sessionId?: string,
+    ): Promise<string> {
       if (!userId.trim()) {
         throw new Error("User ID is required.");
       }
 
+      if (sessionId !== undefined && !sessionId.trim()) {
+        throw new Error("Session ID cannot be empty.");
+      }
+
       const now = Math.floor(Date.now() / 1000);
 
-      return new SignJWT({
+      const payload: { tokenUse: "access"; sid?: string } = {
         tokenUse: "access",
-      })
+      };
+      if (sessionId !== undefined) {
+        payload.sid = sessionId;
+      }
+
+      return new SignJWT(payload)
         .setProtectedHeader({
           alg: "HS256",
           typ: "JWT",
@@ -87,13 +100,18 @@ export function createTokenService(
           payload.tokenUse !== "access" ||
           typeof payload.sub !== "string" ||
           typeof payload.iat !== "number" ||
-          typeof payload.exp !== "number"
+          typeof payload.exp !== "number" ||
+          (payload.sid !== undefined &&
+            (typeof payload.sid !== "string" || payload.sid.length === 0))
         ) {
           return null;
         }
 
         return {
           subject: payload.sub,
+          ...(typeof payload.sid === "string"
+            ? { sessionId: payload.sid }
+            : {}),
           issuedAt: payload.iat,
           expiresAt: payload.exp,
         };

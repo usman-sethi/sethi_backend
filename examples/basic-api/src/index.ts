@@ -1,16 +1,25 @@
 import { createBackend } from "@sethi-backend/core";
 
 import {
+  createAuthService,
+  createAuthenticationGuard,
+} from "@sethi-backend/auth";
+import {
   createFastifyAdapter,
+  createCsrfProtectionHook,
   generateCsrfToken,
   registerHttpSecurity,
 } from "@sethi-backend/adapter-fastify";
 
 import {
   createMongoDatabaseAdapter,
+  createMongoAuthSessionRepository,
+  createMongoAuthUserRepository,
 } from "@sethi-backend/database-mongodb";
+import { createPasswordHasher, createTokenService } from "@sethi-backend/security";
 
 import { loadAppConfig } from "./config.js";
+import { registerAuthRoutes } from "./auth-routes.js";
 
 /**
  * Start the Sethi Backend application.
@@ -24,6 +33,20 @@ async function main(): Promise<void> {
     uri: config.mongodb.uri,
     databaseName: config.mongodb.databaseName,
   });
+  const users = createMongoAuthUserRepository({
+    getDatabase: () => database.getDatabase(),
+  });
+  const sessions = createMongoAuthSessionRepository({
+    getDatabase: () => database.getDatabase(),
+  });
+  const tokens = createTokenService(config.tokens);
+  const authService = await createAuthService({
+    users,
+    sessions,
+    passwordHasher: createPasswordHasher(),
+    tokens,
+  });
+  const authGuard = createAuthenticationGuard({ users, sessions, tokens });
 
   // 3. Create the Fastify adapter.
   const http = createFastifyAdapter({
@@ -33,6 +56,20 @@ async function main(): Promise<void> {
   registerHttpSecurity(http.instance, {
     allowedOrigins: config.httpSecurity.corsOrigins,
     environment: config.environment,
+  });
+
+  http.instance.addHook("onReady", async () => {
+    await Promise.all([
+      users.ensureIndexes(),
+      sessions.ensureIndexes(),
+    ]);
+  });
+
+  registerAuthRoutes(http.instance, {
+    service: authService,
+    guard: authGuard,
+    environment: config.environment,
+    csrfProtection: createCsrfProtectionHook(http.instance),
   });
 
   // 4. Register a CSRF token endpoint for cookie-authenticated clients.

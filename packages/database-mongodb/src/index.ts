@@ -1,3 +1,17 @@
+export {
+  createMongoAuthUserRepository,
+} from "./auth-user-repository.js";
+export type {
+  MongoAuthUserRepositoryOptions,
+} from "./auth-user-repository.js";
+
+export {
+  createMongoAuthSessionRepository,
+} from "./auth-session-repository.js";
+export type {
+  MongoAuthSessionRepositoryOptions,
+} from "./auth-session-repository.js";
+
 import {
   MongoClient,
   type Db,

@@ -178,6 +178,9 @@ importers:
       '@sethi-backend/adapter-fastify':
         specifier: workspace:*
         version: link:../../packages/adapter-fastify
+      '@sethi-backend/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
       '@sethi-backend/config':
         specifier: workspace:*
         version: link:../../packages/config
@@ -187,6 +190,9 @@ importers:
       '@sethi-backend/database-mongodb':
         specifier: workspace:*
         version: link:../../packages/database-mongodb
+      '@sethi-backend/security':
+        specifier: workspace:*
+        version: link:../../packages/security
       zod:
         specifier: ^4.6.7
         version: 4.6.7
@@ -194,6 +200,9 @@ importers:
       '@types/node':
         specifier: ^20.19.43
         version: 20.19.43
+      fastify:
+        specifier: ^5.12.8
+        version: 5.12.8
 
   packages/adapter-fastify:
     dependencies:
@@ -219,6 +228,19 @@ importers:
         specifier: ^5.12.8
         version: 5.12.8
 
+  packages/auth:
+    dependencies:
+      '@sethi-backend/security':
+        specifier: workspace:*
+        version: link:../security
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@types/node':
+        specifier: ^24.19.2
+        version: 24.19.2
+
   packages/config:
     dependencies:
       zod:
@@ -229,6 +251,9 @@ importers:
 
   packages/database-mongodb:
     dependencies:
+      '@sethi-backend/auth':
+        specifier: workspace:*
+        version: link:../auth
       '@sethi-backend/core':
         specifier: workspace:*
         version: link:../core

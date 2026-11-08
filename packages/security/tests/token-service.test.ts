@@ -26,6 +26,16 @@ describe("Token Service", () => {
     expect(result?.expiresAt).toBeGreaterThan(result!.issuedAt);
   });
 
+  it("should include a session identifier in session-aware access tokens", async () => {
+    const tokens = createTokenService(options);
+    const token = await tokens.createAccessToken("user-123", "session-456");
+
+    await expect(tokens.verifyAccessToken(token)).resolves.toMatchObject({
+      subject: "user-123",
+      sessionId: "session-456",
+    });
+  });
+
   it("should reject a token signed by another secret", async () => {
     const first = createTokenService(options);
 

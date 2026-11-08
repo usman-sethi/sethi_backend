@@ -9,12 +9,13 @@ import { loadAppConfig } from "../src/config.js";
 const validMongoUri = "mongodb://127.0.0.1:27017";
 
 const testJwtSecret =
-  "0123456789abcdef-0123456789abcdef";
-  
+  "test-only-secret-0123456789abcdef-0123456789";
+
 describe("Application Configuration", () => {
   it("should apply default configuration values", () => {
     const config = loadAppConfig({
       MONGODB_URI: validMongoUri,
+      JWT_SECRET: testJwtSecret,
     });
 
     expect(config).toEqual({
@@ -32,6 +33,13 @@ describe("Application Configuration", () => {
 
       httpSecurity: {
         corsOrigins: ["http://localhost:5173"],
+      },
+
+      tokens: {
+        secret: testJwtSecret,
+        issuer: "sethi-backend",
+        audience: "sethi-backend-api",
+        accessTokenTtlSeconds: 900,
       },
     });
   });
@@ -63,12 +71,20 @@ describe("Application Configuration", () => {
       httpSecurity: {
         corsOrigins: ["https://frontend.example"],
       },
+
+      tokens: {
+        secret: testJwtSecret,
+        issuer: "sethi-backend",
+        audience: "sethi-backend-api",
+        accessTokenTtlSeconds: 900,
+      },
     });
   });
 
   it("should normalize and validate configured CORS origins", () => {
     const config = loadAppConfig({
       MONGODB_URI: validMongoUri,
+      JWT_SECRET: testJwtSecret,
       CORS_ORIGINS: " https://example.com:443/ ,https://example.com",
     });
 
@@ -90,6 +106,7 @@ describe("Application Configuration", () => {
           ? "production"
           : "development",
         MONGODB_URI: validMongoUri,
+        JWT_SECRET: testJwtSecret,
         CORS_ORIGINS: origins,
       }),
     ).toThrow();
@@ -99,6 +116,7 @@ describe("Application Configuration", () => {
     expect(() =>
       loadAppConfig({
         MONGODB_URI: validMongoUri,
+        JWT_SECRET: testJwtSecret,
         PORT: "70000",
       }),
     ).toThrow("PORT");
@@ -108,6 +126,7 @@ describe("Application Configuration", () => {
     expect(() =>
       loadAppConfig({
         MONGODB_URI: "https://example.com",
+        JWT_SECRET: testJwtSecret,
       }),
     ).toThrow("MONGODB_URI");
   });

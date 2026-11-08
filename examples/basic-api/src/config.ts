@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  ConfigValidationError,
   loadConfig,
   type ConfigSource,
 } from "@sethi-backend/config";
@@ -151,8 +152,10 @@ const environmentSchema = z.object({
     .max(7 * 24 * 60 * 60)
     .default(30 * 60),
 }).superRefine((env, context) => {
+  const production = env.NODE_ENV === "production";
+
   if (
-    env.NODE_ENV === "production" &&
+    production &&
     env.APP_BASE_URL &&
     !isHttpsUrl(env.APP_BASE_URL)
   ) {
@@ -162,10 +165,25 @@ const environmentSchema = z.object({
       message: "APP_BASE_URL must use HTTPS in production.",
     });
   }
+  if (
+    production &&
+    (
+      new Set(env.JWT_SECRET).size < 8 ||
+      /^(.)\1+$/.test(env.JWT_SECRET) ||
+      /(change.?me|replace.?with|your.?secret|example.?secret|test.?only|password)/i.test(env.JWT_SECRET)
+    )
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["JWT_SECRET"],
+      message: "JWT_SECRET must not be a placeholder or repetitive value in production.",
+    });
+  }
+
   const smtpConfigured = Boolean(
     env.SMTP_HOST || env.SMTP_USER || env.SMTP_PASSWORD || env.EMAIL_FROM,
   );
-  if (!smtpConfigured) {
+  if (!smtpConfigured && !production) {
     return;
   }
   if (!env.SMTP_HOST) {
@@ -205,10 +223,29 @@ export function loadAppConfig(
   source: ConfigSource = process.env,
 ) {
   const env = loadConfig(environmentSchema, source);
-  const corsOrigins = normalizeAllowedOrigins(
-    env.CORS_ORIGINS,
-    env.NODE_ENV,
-  );
+  if (env.NODE_ENV === "production") {
+    if (!source.CORS_ORIGINS?.trim()) {
+      throw new ConfigValidationError(
+        "Production configuration requires an explicit CORS_ORIGINS allowlist.",
+      );
+    }
+    if (
+      !source.MONGODB_DATABASE?.trim() ||
+      env.MONGODB_DATABASE === "sethi_backend_dev"
+    ) {
+      throw new ConfigValidationError(
+        "Production configuration requires an explicit non-development MONGODB_DATABASE.",
+      );
+    }
+  }
+  let corsOrigins: string[];
+  try {
+    corsOrigins = normalizeAllowedOrigins(env.CORS_ORIGINS, env.NODE_ENV);
+  } catch {
+    throw new ConfigValidationError(
+      "CORS_ORIGINS contains an invalid origin for this environment.",
+    );
+  }
 
   return {
     environment: env.NODE_ENV,
@@ -246,6 +283,9 @@ export function loadAppConfig(
           port: env.SMTP_PORT,
           secure: env.SMTP_SECURE,
           from: env.EMAIL_FROM,
+          ...(env.NODE_ENV === "production" && !env.SMTP_SECURE
+            ? { requireTLS: true }
+            : {}),
           ...(env.SMTP_USER ? { username: env.SMTP_USER } : {}),
           ...(env.SMTP_PASSWORD ? { password: env.SMTP_PASSWORD } : {}),
         }

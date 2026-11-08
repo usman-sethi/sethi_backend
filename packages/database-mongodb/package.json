@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "MongoDB database adapter for Sethi Backend.",
   "license": "MIT",
+  "engines": {
+    "node": "^22.12.0 || ^24.0.0 || >=26.0.0"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -23,5 +26,9 @@
     "@sethi-backend/auth": "workspace:*",
     "@sethi-backend/core": "workspace:*",
     "mongodb": "^7.8.0"
+  },
+  "devDependencies": {
+    "@sethi-backend/adapter-fastify": "workspace:*",
+    "@sethi-backend/security": "workspace:*"
   }
 }

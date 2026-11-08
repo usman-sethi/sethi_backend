@@ -6,6 +6,7 @@ export interface SmtpEmailSenderOptions {
   host: string;
   port: number;
   secure: boolean;
+  requireTLS?: boolean;
   from: string;
   username?: string;
   password?: string;
@@ -34,6 +35,7 @@ export function createSmtpEmailSender(
     host,
     port: options.port,
     secure: options.secure,
+    ...(options.requireTLS ? { requireTLS: true } : {}),
     ...(options.username && options.password
       ? { auth: { user: options.username, pass: options.password } }
       : {}),

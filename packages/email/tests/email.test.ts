@@ -29,6 +29,7 @@ describe("SMTP email sender", () => {
       host: "smtp.example.com",
       port: 587,
       secure: false,
+      requireTLS: true,
       username: "smtp-user",
       password: "smtp-password",
       from: "Sethi <no-reply@example.com>",
@@ -45,6 +46,7 @@ describe("SMTP email sender", () => {
       host: "smtp.example.com",
       port: 587,
       secure: false,
+      requireTLS: true,
       auth: { user: "smtp-user", pass: "smtp-password" },
     });
     expect(mocks.sendMail).toHaveBeenCalledWith({

@@ -6,6 +6,9 @@ import {
   type AuthSecurityEvent,
 } from "@sethi-backend/auth";
 import {
+  ConfigValidationError,
+} from "@sethi-backend/config";
+import {
   createFastifyAdapter,
   createCsrfProtectionHook,
   generateCsrfToken,
@@ -24,6 +27,7 @@ import { createPasswordHasher, createTokenService } from "@sethi-backend/securit
 import { loadAppConfig } from "./config.js";
 import { registerAuthRoutes } from "./auth-routes.js";
 import { registerAdminRoutes } from "./admin-routes.js";
+import { registerHealthRoutes } from "./health-routes.js";
 
 /**
  * Start the Sethi Backend application.
@@ -122,35 +126,11 @@ async function main(): Promise<void> {
     };
   });
 
-  // 5. Register the health endpoint.
-  http.instance.get("/health", async () => {
-    return {
-      status: "ok",
-      service: "sethi-backend",
-      uptimeSeconds: Math.floor(process.uptime()),
-    };
+  registerHealthRoutes(http.instance, async () => {
+    await database.getDatabase().command({ ping: 1 });
   });
 
-  // 6. Register the database readiness endpoint.
-  http.instance.get("/ready", async (_request, reply) => {
-    try {
-      await database.getDatabase().command({
-        ping: 1,
-      });
-
-      return reply.code(200).send({
-        status: "ready",
-        database: "reachable",
-      });
-    } catch {
-      return reply.code(503).send({
-        status: "not_ready",
-        database: "unavailable",
-      });
-    }
-  });
-
-  // 7. Compose the application.
+  // 6. Compose the application.
   const app = createBackend({
     server: config.server,
     adapter: http,
@@ -169,14 +149,24 @@ async function main(): Promise<void> {
 
     shuttingDown = true;
 
-    console.log(`Received ${signal}. Shutting down...`);
+    http.instance.log.info({
+      event: "app.shutdown_started",
+      signal,
+    }, "Application shutdown started");
 
     try {
       await app.stop();
 
-      console.log("Sethi Backend stopped successfully.");
+      http.instance.log.info({
+        event: "app.shutdown_completed",
+        signal,
+      }, "Application shutdown completed");
     } catch (error) {
-      console.error("Shutdown failed:", error);
+      http.instance.log.error({
+        event: "app.shutdown_failed",
+        signal,
+        errorName: safeErrorName(error),
+      }, "Application shutdown failed");
 
       process.exitCode = 1;
     }
@@ -193,13 +183,16 @@ async function main(): Promise<void> {
   process.once("SIGINT", handleSigint);
   process.once("SIGTERM", handleSigterm);
 
-  // 8. Start the application.
+  // 7. Start the application.
   try {
     await app.start();
 
-    console.log(
-      `Sethi Backend listening at http://${config.server.host}:${config.server.port}`,
-    );
+    http.instance.log.info({
+      event: "app.started",
+      host: config.server.host,
+      port: config.server.port,
+      environment: config.environment,
+    }, "Sethi Backend is listening");
   } catch (error) {
     process.off("SIGINT", handleSigint);
     process.off("SIGTERM", handleSigterm);
@@ -208,15 +201,23 @@ async function main(): Promise<void> {
   }
 }
 
+function safeErrorName(error: unknown): string {
+  const name = error instanceof Error ? error.name : "UnknownError";
+  return /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(name) ? name : "Error";
+}
+
 /**
  * Handle configuration and startup failures.
  */
 await main().catch((error: unknown) => {
-  console.error("Failed to start Sethi Backend.");
-
-  console.error(
-    error instanceof Error ? error.message : error,
-  );
+  const details = error instanceof ConfigValidationError
+    ? error.message
+    : undefined;
+  console.error("Failed to start Sethi Backend.", {
+    event: "app.startup_failed",
+    errorName: safeErrorName(error),
+    ...(details ? { details } : {}),
+  });
 
   process.exitCode = 1;
 });

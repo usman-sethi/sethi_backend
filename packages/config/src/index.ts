@@ -8,6 +8,13 @@ export type ConfigSource = Readonly<
   Record<string, string | undefined>
 >;
 
+export class ConfigValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConfigValidationError";
+  }
+}
+
 /**
  * Loads, validates and transforms configuration.
  *
@@ -31,7 +38,7 @@ export function loadConfig<TSchema extends z.ZodType>(
       })
       .join("\n");
 
-    throw new Error(
+    throw new ConfigValidationError(
       `Configuration validation failed:\n${details}`,
     );
   }

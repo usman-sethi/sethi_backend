@@ -6,12 +6,12 @@
   <p>Separating the application lifecycle from HTTP servers and database implementations.</p>
 
   <p>
-    <a href="https://github.com/usman-sethi/sethi_backend"><img src="https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen?style=flat-square&logo=nodedotjs&logoColor=white" alt="Node.js Version"></a>
-    <a href="https://github.com/usman-sethi/sethi_backend"><img src="https://img.shields.io/badge/typescript-%5E5.0-blue?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript"></a>
-    <a href="https://github.com/usman-sethi/sethi_backend"><img src="https://img.shields.io/badge/pnpm-%3E%3D8.0.0-orange?style=flat-square&logo=pnpm&logoColor=white" alt="pnpm"></a>
-    <a href="https://github.com/usman-sethi/sethi_backend"><img src="https://img.shields.io/badge/fastify-v4.x-black?style=flat-square&logo=fastify&logoColor=white" alt="Fastify"></a>
-    <a href="https://github.com/usman-sethi/sethi_backend"><img src="https://img.shields.io/badge/mongodb-v6.x-green?style=flat-square&logo=mongodb&logoColor=white" alt="MongoDB"></a>
-    <a href="https://github.com/usman-sethi/sethi_backend"><img src="https://img.shields.io/badge/tests-123%20passing-success?style=flat-square&logo=vitest&logoColor=white" alt="Tests"></a>
+    <a href="https://github.com/usman-sethi/sethi_backend"><img src="https://img.shields.io/badge/node-22.12%20%7C%2024%20%7C%2026%2B-brightgreen?style=flat-square&logo=nodedotjs&logoColor=white" alt="Node.js Version"></a>
+    <a href="https://github.com/usman-sethi/sethi_backend"><img src="https://img.shields.io/badge/typescript-7.x-blue?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript"></a>
+    <a href="https://github.com/usman-sethi/sethi_backend"><img src="https://img.shields.io/badge/pnpm-12.x-orange?style=flat-square&logo=pnpm&logoColor=white" alt="pnpm"></a>
+    <a href="https://github.com/usman-sethi/sethi_backend"><img src="https://img.shields.io/badge/fastify-5.x-black?style=flat-square&logo=fastify&logoColor=white" alt="Fastify"></a>
+    <a href="https://github.com/usman-sethi/sethi_backend"><img src="https://img.shields.io/badge/mongodb-7.x-green?style=flat-square&logo=mongodb&logoColor=white" alt="MongoDB"></a>
+    <a href="https://github.com/usman-sethi/sethi_backend"><img src="https://img.shields.io/badge/tests-128%20passing-success?style=flat-square&logo=vitest&logoColor=white" alt="Tests"></a>
   </p>
 
   <p>
@@ -21,6 +21,10 @@
     <a href="#-getting-started">Getting Started</a> &bull;
     <a href="#-api-endpoints">API Endpoints</a> &bull;
     <a href="#-testing">Testing</a> &bull;
+    <a href="docs/deployment.md">Deployment</a> &bull;
+    <a href="docs/security.md">Security</a> &bull;
+    <a href="docs/authentication.md">Authentication</a> &bull;
+    <a href="docs/packages.md">Packages</a> &bull;
     <a href="#-roadmap">Roadmap</a>
   </p>
 
@@ -49,9 +53,9 @@ Sethi Backend is currently in active development. The foundational milestone is 
 | **Monorepo & Core** | ✅ Implemented | pnpm workspace setup, core engine lifecycle, HTTP/database adapter contracts, automated tests. |
 | **HTTP Layer** | ✅ Implemented | Fastify server adapter, request/response lifecycle integration. |
 | **Database Layer** | ✅ Implemented | MongoDB adapter, connection management, readiness probes (`/ready`). |
-| **Observability** | ✅ Implemented | `/health` liveness endpoint, `/ready` database check, structured graceful shutdown. |
+| **Observability** | ✅ Implemented | Server-generated request IDs, duration/error logs with redaction, `/health` liveness, `/ready` database check, structured graceful shutdown. |
 | **Security & Auth** | ✅ Implemented | Argon2id, session-bound JWTs, refresh replay protection, email verification, password reset with transactional session revocation, SMTP delivery, persistent RBAC and audited role changes. |
-| **Developer Tooling** | 🚧 Planned | CLI code generators, project scaffolding, advanced documentation & release automation. |
+| **Release validation** | 🚧 In progress | Required-service integration tests, isolated local package registry, independent consumer workflow, and CI validation are configured; MongoDB and installed-consumer verification must still execute in CI or locally. |
 
 ---
 
@@ -59,12 +63,12 @@ Sethi Backend is currently in active development. The foundational milestone is 
 
 The framework leverages modern, high-performance tooling built for type safety and developer velocity:
 
-* **Language:** TypeScript (^5.x)
-* **Package Manager:** pnpm Workspaces
-* **HTTP Framework:** Fastify
-* **Database Driver:** MongoDB Node.js Driver
+* **Language:** TypeScript 7
+* **Package Manager:** pnpm 12 workspaces
+* **HTTP Framework:** Fastify 5
+* **Database Driver:** MongoDB Node.js Driver 7
 * **Testing Framework:** Vitest
-* **Runtime:** Node.js (>=20.0.0)
+* **Runtime:** Node.js 22.12+, 24.x, or 26+
 
 ---
 
@@ -157,8 +161,8 @@ sequenceDiagram
 ## Getting Started
 
 ### Prerequisites
-* **Node.js**: `>=20.0.0`
-* **pnpm**: `>=8.0.0`
+* **Node.js**: `^22.12.0`, `^24.0.0`, or `>=26.0.0` (MongoDB driver support range)
+* **pnpm**: `12.18.0` (repository package manager)
 * **MongoDB**: Local installation running on `mongodb://127.0.0.1:27017` or a reachable MongoDB Atlas instance.
 
 ### 1. Clone the Repository
@@ -184,7 +188,8 @@ Copy the example environment configuration file:
   cp .env.example .env
   ```
 
-Ensure your `.env` file is configured correctly:
+The example file is suitable for local development. Replace the placeholder
+JWT secret before using the API:
 ```env
 HOST=127.0.0.1
 PORT=3000
@@ -200,11 +205,44 @@ Generate a secret rather than using the placeholder:
 
 > **Note:** Ensure your MongoDB instance is active and reachable before starting the application. Never use the example placeholder in production or commit real database credentials or production secrets.
 
+Build and start the example:
+
+```bash
+pnpm build
+pnpm --filter @sethi-backend/example-basic-api start
+```
+
+Email-dependent authentication flows require an SMTP server. See the [environment
+reference](#environment-variables) and [authentication guide](docs/authentication.md).
+
+### Environment variables
+
+| Variable | Development default | Production |
+| :--- | :--- | :--- |
+| `NODE_ENV` | `development` | Set to `production` to enable strict checks and secure cookies. |
+| `HOST` | `127.0.0.1` | Bind deliberately; use a trusted TLS-terminating proxy when needed. |
+| `PORT` | `3000` | Optional override. |
+| `MONGODB_URI` | Required | Required; keep credentials in a secret manager. |
+| `MONGODB_DATABASE` | `sethi_backend_dev` | Required explicitly; the development database name is rejected. |
+| `JWT_SECRET` | Required | At least 32 characters and not an obvious placeholder; generate a random secret. |
+| `JWT_ISSUER` / `JWT_AUDIENCE` | `sethi-backend` / `sethi-backend-api` | Override when isolating deployments or token consumers. |
+| `ACCESS_TOKEN_TTL_SECONDS` | `900` | `60`–`3600`. |
+| `CORS_ORIGINS` | `http://localhost:5173` | Required explicit HTTPS origin allowlist; wildcard and `null` are rejected. |
+| `SMTP_HOST` / `SMTP_PORT` | blank / `587` | Required for the production account-verification and reset flows. |
+| `SMTP_SECURE` | `false` | Use implicit TLS when `true`; otherwise production requires STARTTLS. |
+| `SMTP_USER` / `SMTP_PASSWORD` | blank | Optional, but must be configured as a pair. |
+| `EMAIL_FROM` / `APP_BASE_URL` | blank | Required for production email flows; base URL must use HTTPS. |
+| `EMAIL_VERIFICATION_TOKEN_TTL_SECONDS` | `86400` | `60`–`604800`. |
+| `PASSWORD_RESET_TOKEN_TTL_SECONDS` | `1800` | `60`–`604800`. |
+
+See [.env.example](.env.example) for the complete variable template and
+[deployment guide](docs/deployment.md) for production setup.
+
 ---
 
 ## Building the Project
 
-Compile all workspace packages in dependency order:
+Compile all workspace packages in dependency order (including declarations):
 ```bash
 pnpm build
 ```
@@ -228,6 +266,10 @@ pnpm --filter @sethi-backend/example-basic-api start
 
 The server will initialize at:
 `http://127.0.0.1:3000`
+
+The development environment intentionally permits the sample JWT secret and
+does not require SMTP. Production startup rejects placeholder secrets, missing
+origins/database identity, and incomplete email configuration.
 
 ---
 
@@ -503,30 +545,19 @@ The authentication repository tests use mocks; they do not claim a live
 MongoDB integration test. The Fastify injection tests exercise the complete
 HTTP lifecycle with repository doubles.
 
-### Optional real MongoDB integration
+### Real integration tests and package consumer
 
-The opt-in suite performs real inserts, unique-index checks, refresh/replay
-operations, transactional email verification and password resets, session
-revocation, and administrator-role integrity checks. It only permits a local
-MongoDB host and requires an explicitly named database ending in
-`_integration_test`. Transactions require that local MongoDB run as a replica
-set. Each run uses a unique temporary database and drops only that database
-afterward. The suite is separate from `pnpm test`.
+The strict `pnpm test:integration` command requires local MongoDB replica-set,
+Mailpit, and explicit test-only variables. It fails clearly when services are
+missing and does not skip tests. Its nine tests verify real MongoDB persistence
+and transactions, HTTP authentication/RBAC, and delivered SMTP messages.
 
-PowerShell setup and invocation:
-
-```powershell
-$env:TEST_MONGODB_URI = "mongodb://127.0.0.1:27017"
-$env:TEST_MONGODB_DATABASE = "sethi_backend_integration_test"
-pnpm test:integration
-```
-
-Configure a disposable local replica-set MongoDB instance before running the
-real integration suite; do not point it at a production or shared database.
-
-An SMTP smoke test is also opt-in and sends only to the explicitly set
-`TEST_SMTP_RECIPIENT`. Set `SMTP_TEST_ENABLED=true` and SMTP environment values
-for a test account, then run `pnpm test:integration`. It is skipped otherwise.
+Run `pnpm test:services:up` and `pnpm test:services:wait`, configure the test
+variables, then run `pnpm test:integration`. `pnpm validate:packages` publishes
+the seven built tarballs only to a loopback Verdaccio registry, installs them
+outside the monorepo, type-checks a consumer, and exercises a real API against
+the same isolated services. See the [integration and package-consumer guide](docs/integration-testing.md)
+for exact commands and cleanup instructions.
 
 ---
 
@@ -535,7 +566,7 @@ for a test account, then run `pnpm test:integration`. It is skipped otherwise.
 Sethi Backend listens for termination signals (`SIGINT` and `SIGTERM`). Upon receiving a signal (e.g., pressing `Ctrl + C`), the application executes a structured teardown:
 1. Stops accepting new HTTP requests and closes the Fastify server.
 2. Gracefully disconnects active MongoDB client pools.
-3. Exits cleanly with status code `0`.
+3. Exits with status code `0` on success or non-zero if shutdown fails.
 
 ---
 
@@ -563,18 +594,23 @@ Sethi Backend listens for termination signals (`SIGINT` and `SIGTERM`). Upon rec
   - Project initialization CLI (`sethi init`)
   - Code generators & templates
   - System diagnostics
-- [ ] **Milestone 6 — Release Preparation** *(Planned)*
-  - Comprehensive integration testing
-  - Production hardening & documentation
-  - Package publishing pipeline
+- [ ] **Milestone 6 — Release Preparation** *(In progress; not yet release-certified)*
+  - Production configuration and dependency hardening
+  - Package build and packing verification
+  - Live MongoDB and SMTP execution remains environment-dependent
 
 ---
 
 ## Development
 
 Developers can explore and modify workspace packages:
-* **Run tests in watch mode:** `pnpm --filter @sethi-backend/core test`
+* **Run tests in watch mode:** `pnpm test:watch`
 * **Adding an Adapter:** Create a new package under `packages/` implementing the respective core contract interface (`ServerAdapter` or `DatabaseAdapter`).
+
+See the [package overview](docs/packages.md), [authentication guide](docs/authentication.md),
+[security guide](docs/security.md), [deployment guide](docs/deployment.md), and
+[troubleshooting guide](docs/troubleshooting.md) for package imports and
+operational details.
 
 ---
 

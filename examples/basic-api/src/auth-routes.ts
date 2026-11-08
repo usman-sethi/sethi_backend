@@ -25,8 +25,14 @@ type FastifyInstance = FastifyHttpAdapter["instance"];
 const REFRESH_COOKIE_NAME = "refresh_token";
 
 interface AuthErrorReply {
+  request: { id: string };
   code(statusCode: number): AuthErrorReply;
   send(payload: unknown): unknown;
+}
+
+function safeErrorName(error: unknown): string {
+  const name = error instanceof Error ? error.name : "UnknownError";
+  return /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(name) ? name : "Error";
 }
 
 function sendAuthError(
@@ -34,11 +40,13 @@ function sendAuthError(
   error: unknown,
   reply: AuthErrorReply,
 ) {
+  const requestId = reply.request.id;
   if (error instanceof AuthValidationError) {
     return reply.code(400).send({
       error: {
         code: error.code,
         message: error.message,
+        requestId,
       },
     });
   }
@@ -48,31 +56,32 @@ function sendAuthError(
       error: {
         code: error.code,
         message: error.message,
+        requestId,
       },
     });
   }
 
   if (error instanceof InvalidActionTokenError) {
     return reply.code(400).send({
-      error: { code: error.code, message: error.message },
+      error: { code: error.code, message: error.message, requestId },
     });
   }
 
   if (error instanceof ForbiddenError) {
     return reply.code(403).send({
-      error: { code: error.code, message: error.message },
+      error: { code: error.code, message: error.message, requestId },
     });
   }
 
   if (error instanceof UserNotFoundError) {
     return reply.code(404).send({
-      error: { code: error.code, message: error.message },
+      error: { code: error.code, message: error.message, requestId },
     });
   }
 
   if (error instanceof LastAdministratorError) {
     return reply.code(409).send({
-      error: { code: error.code, message: error.message },
+      error: { code: error.code, message: error.message, requestId },
     });
   }
 
@@ -85,20 +94,22 @@ function sendAuthError(
       error: {
         code: error.code,
         message: error.message,
+        requestId,
       },
     });
   }
 
   if (error instanceof AuthRepositoryError) {
     server.log.error(
-      { event: "auth.request.failed", errorName: error.name },
+      { event: "auth.request.failed", requestId, errorName: safeErrorName(error) },
       "Authentication storage operation failed",
     );
   } else {
     server.log.error(
       {
         event: "auth.request.failed",
-        errorName: error instanceof Error ? error.name : "UnknownError",
+        requestId,
+        errorName: safeErrorName(error),
       },
       "Authentication request failed",
     );
@@ -108,6 +119,7 @@ function sendAuthError(
     error: {
       code: "INTERNAL_ERROR",
       message: "Authentication request failed.",
+      requestId,
     },
   });
 }

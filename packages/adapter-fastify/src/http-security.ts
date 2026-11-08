@@ -26,6 +26,7 @@ export interface HttpSecurityOptions {
   cors?: {
     methods?: readonly string[];
     allowedHeaders?: readonly string[];
+    exposedHeaders?: readonly string[];
     maxAgeSeconds?: number;
   };
   csrf?: {
@@ -146,6 +147,7 @@ export function registerHttpSecurity(
     "Authorization",
     "X-CSRF-Token",
   ];
+  const exposedHeaders = options.cors?.exposedHeaders ?? ["X-Request-Id"];
   const maxAgeSeconds = options.cors?.maxAgeSeconds ?? 600;
 
   if (methods.length === 0 || methods.some((method) => !method.trim())) {
@@ -159,6 +161,10 @@ export function registerHttpSecurity(
     throw new Error(
       "CORS allowed headers must contain at least one non-empty value.",
     );
+  }
+
+  if (exposedHeaders.some((header) => !header.trim())) {
+    throw new Error("CORS exposed headers cannot contain empty values.");
   }
 
   if (!Number.isInteger(maxAgeSeconds) || maxAgeSeconds < 0) {
@@ -187,6 +193,7 @@ export function registerHttpSecurity(
     credentials: true,
     methods: [...methods],
     allowedHeaders: [...allowedHeaders],
+    exposedHeaders: [...exposedHeaders],
     maxAge: maxAgeSeconds,
     strictPreflight: true,
   });

@@ -1,0 +1,38 @@
+services:
+  mongodb:
+    image: mongo:8.0
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "127.0.0.1:27017:27017"
+    healthcheck:
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --host
+        - 127.0.0.1
+        - --port
+        - "27017"
+        - --eval
+        - "try { rs.status().ok } catch (error) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: '127.0.0.1:27017' }] }).ok }"
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  mailpit:
+    image: axllent/mailpit:v1.33.1
+    ports:
+      - "127.0.0.1:1025:1025"
+      - "127.0.0.1:8025:8025"
+
+  verdaccio:
+    image: verdaccio/verdaccio:7.0.2
+    ports:
+      - "127.0.0.1:4873:4873"
+    volumes:
+      - ./config/verdaccio.yaml:/verdaccio/conf/config.yaml:ro
+      - verdaccio-storage:/verdaccio/storage
+
+volumes:
+  verdaccio-storage:

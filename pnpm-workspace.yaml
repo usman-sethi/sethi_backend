@@ -3,3 +3,6 @@ packages:
   - "examples/*"
 allowBuilds:
   argon2: true
+minimumReleaseAgeExclude:
+  # Required for the audited, patched Nodemailer release.
+  - nodemailer@10.4.0

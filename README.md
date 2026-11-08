@@ -50,7 +50,7 @@ Sethi Backend is currently in active development. The foundational milestone is 
 | **HTTP Layer** | ✅ Implemented | Fastify server adapter, request/response lifecycle integration. |
 | **Database Layer** | ✅ Implemented | MongoDB adapter, connection management, readiness probes (`/ready`). |
 | **Observability** | ✅ Implemented | `/health` liveness endpoint, `/ready` database check, structured graceful shutdown. |
-| **Security & Auth** | 🚧 Planned | Zod environment validation, Argon2id password hashing, JWT token architecture, CORS, rate-limiting. |
+| **Security & Auth** | 🚧 In progress | Environment validation, Argon2id and JWT primitives, Fastify HTTP security (Helmet, strict CORS, cookies, route-level rate limits and CSRF utilities). Authentication flows remain planned. |
 | **Developer Tooling** | 🚧 Planned | CLI code generators, project scaffolding, advanced documentation & release automation. |
 
 ---
@@ -219,12 +219,13 @@ The server will initialize at:
 
 ## API Endpoints
 
-The basic API example exposes standard health and readiness monitoring endpoints:
+The basic API example exposes health, readiness, and CSRF-token endpoints:
 
 | Method | Endpoint | Purpose |
 | :--- | :--- | :--- |
 | `GET` | `/health` | Application liveness check |
 | `GET` | `/ready` | MongoDB database readiness check |
+| `GET` | `/csrf-token` | Creates a CSRF token for a cookie-authenticated client |
 
 ### Response Examples
 
@@ -246,6 +247,46 @@ The basic API example exposes standard health and readiness monitoring endpoints
   ```
   > *Note: `/ready` returns HTTP status `503 Service Unavailable` if the MongoDB database connection is dropped or unreachable.*
 
+## Fastify HTTP security
+
+The Fastify adapter exposes `registerHttpSecurity`. Register it before routes,
+with an explicit origin allowlist and the application environment:
+
+```ts
+registerHttpSecurity(http.instance, {
+  allowedOrigins: ["https://frontend.example"],
+  environment: "production",
+});
+```
+
+The adapter adds Helmet headers, credentialed CORS for only the configured
+origins, cookie parsing/serialization, CSRF-token helpers, and a rate-limit
+plugin that is opt-in per route. CORS origins are normalized and reject
+wildcards, `null`, invalid URLs, and non-HTTPS production origins. A disallowed
+browser origin may still receive an HTTP response, but it does not receive
+`Access-Control-Allow-Origin`.
+
+CSRF verification is also opt-in per route, so public and bearer-token routes
+are not forced to use CSRF tokens. Use `createCsrfProtectionHook` on routes
+that rely on browser cookies, and obtain a token from `GET /csrf-token` before
+sending the `X-CSRF-Token` header:
+
+```ts
+http.instance.post(
+  "/account/update",
+  {
+    onRequest: createCsrfProtectionHook(http.instance),
+    config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+  },
+  async () => ({ status: "updated" }),
+);
+```
+
+CSRF cookies are HttpOnly, SameSite=Lax, and Secure in production. The default
+rate-limit store is in-memory; multi-instance deployments need a shared store.
+Configure Fastify's proxy trust only for known trusted reverse proxies before
+relying on forwarded client addresses or HTTPS termination.
+
 ---
 
 ## Testing
@@ -255,10 +296,9 @@ Run the test suite across all workspace packages via Vitest:
 pnpm test
 ```
 
-### Verified Test Suites (12 Passing Tests)
-* **Core Lifecycle:** 4 tests covering application startup and lifecycle hooks.
-* **Fastify Adapter:** 3 tests validating server routing and endpoint responses.
-* **MongoDB Adapter:** 5 tests verifying connection management and health checks (using driver mocks).
+### Test coverage
+The Vitest suite covers core lifecycle behavior, HTTP security and CORS, config
+validation, password/token utilities, and MongoDB adapter behavior.
 
 > *The basic API example has also been verified against live running MongoDB instances.*
 

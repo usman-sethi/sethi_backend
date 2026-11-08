@@ -4,6 +4,9 @@ import {
   loadConfig,
   type ConfigSource,
 } from "@sethi-backend/config";
+import {
+  normalizeAllowedOrigins,
+} from "@sethi-backend/adapter-fastify";
 
 /**
  * Validate the MongoDB connection string.
@@ -94,6 +97,10 @@ export function loadAppConfig(
   source: ConfigSource = process.env,
 ) {
   const env = loadConfig(environmentSchema, source);
+  const corsOrigins = normalizeAllowedOrigins(
+    env.CORS_ORIGINS,
+    env.NODE_ENV,
+  );
 
   return {
     environment: env.NODE_ENV,
@@ -106,6 +113,10 @@ export function loadAppConfig(
     mongodb: {
       uri: env.MONGODB_URI,
       databaseName: env.MONGODB_DATABASE,
+    },
+
+    httpSecurity: {
+      corsOrigins,
     },
   };
 }

@@ -95,9 +95,14 @@ export function createFastifyAdapter(
 }
 
 export {
+  createCsrfProtectionHook,
+  generateCsrfToken,
+  getHttpCookieOptions,
+  normalizeAllowedOrigins,
   registerHttpSecurity,
 } from "./http-security.js";
 
 export type {
+  HttpSecurityEnvironment,
   HttpSecurityOptions,
 } from "./http-security.js";

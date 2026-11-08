@@ -2,6 +2,8 @@ import { createBackend } from "@sethi-backend/core";
 
 import {
   createFastifyAdapter,
+  generateCsrfToken,
+  registerHttpSecurity,
 } from "@sethi-backend/adapter-fastify";
 
 import {
@@ -28,7 +30,21 @@ async function main(): Promise<void> {
     logger: config.environment !== "test",
   });
 
-  // 4. Register the health endpoint.
+  registerHttpSecurity(http.instance, {
+    allowedOrigins: config.httpSecurity.corsOrigins,
+    environment: config.environment,
+  });
+
+  // 4. Register a CSRF token endpoint for cookie-authenticated clients.
+  http.instance.get("/csrf-token", async (_request, reply) => {
+    reply.header("Cache-Control", "no-store");
+
+    return {
+      token: generateCsrfToken(reply),
+    };
+  });
+
+  // 5. Register the health endpoint.
   http.instance.get("/health", async () => {
     return {
       status: "ok",
@@ -37,7 +53,7 @@ async function main(): Promise<void> {
     };
   });
 
-  // 5. Register the database readiness endpoint.
+  // 6. Register the database readiness endpoint.
   http.instance.get("/ready", async (_request, reply) => {
     try {
       await database.getDatabase().command({
@@ -56,7 +72,7 @@ async function main(): Promise<void> {
     }
   });
 
-  // 6. Compose the application.
+  // 7. Compose the application.
   const app = createBackend({
     server: config.server,
     adapter: http,
@@ -99,7 +115,7 @@ async function main(): Promise<void> {
   process.once("SIGINT", handleSigint);
   process.once("SIGTERM", handleSigterm);
 
-  // 7. Start the application.
+  // 8. Start the application.
   try {
     await app.start();
 

@@ -3,7 +3,7 @@ name: Release validation
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, chore/release-candidate-validation]
   workflow_dispatch:
 
 permissions:
@@ -91,16 +91,24 @@ jobs:
         run: |
           echo "Compose status:"
           docker compose -f docker-compose.test.yml ps -a || true
-          echo "MongoDB container logs:"
-          docker compose -f docker-compose.test.yml logs --no-color mongodb || true
-          echo "MongoDB image architecture:"
-          docker image inspect mongo:8.0 --format '{{.Os}}/{{.Architecture}}' || true
+          for service in mongodb redis mailpit verdaccio; do
+            echo "$service container logs:"
+            docker compose -f docker-compose.test.yml logs --no-color "$service" || true
+          done
+          echo "Service image architectures:"
+          for image in mongo:8.0 redis:7.4-alpine axllent/mailpit:v1.33.1 verdaccio/verdaccio:7.0.2; do
+            docker image inspect "$image" --format "$image: {{.Os}}/{{.Architecture}}" || true
+          done
           echo "Docker host architecture:"
           docker info --format '{{.Architecture}}' || true
           echo "GitHub runner architecture: ${{ runner.arch }} ($(uname -m))"
           echo "AVX availability:"
           if grep -qm1 -w avx /proc/cpuinfo; then echo "AVX: available"; else echo "AVX: unavailable"; fi
           if grep -qm1 -w avx2 /proc/cpuinfo; then echo "AVX2: available"; else echo "AVX2: unavailable"; fi
+          echo "Required test variable presence (values are not printed):"
+          for variable in TEST_MONGODB_URI TEST_MONGODB_DATABASE TEST_REDIS_URL SMTP_TEST_ENABLED SMTP_HOST SMTP_PORT SMTP_SECURE EMAIL_FROM TEST_SMTP_RECIPIENT MAILPIT_API_URL; do
+            if [ -n "$(printenv "$variable")" ]; then echo "$variable: set"; else echo "$variable: missing"; fi
+          done
 
       - name: Stop isolated test services
         if: always()

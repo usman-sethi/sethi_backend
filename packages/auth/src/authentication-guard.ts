@@ -133,6 +133,16 @@ export function createAuthenticationGuard(
         throw new UnauthorizedError("Access token is invalid or expired.");
       }
 
+      if (!user.emailVerified) {
+        reportSecurityEvent({
+          type: "access.rejected",
+          reason: "email_unverified",
+          userId: verifiedToken.subject,
+          sessionId: session.id,
+        });
+        throw new UnauthorizedError("Access token is invalid or expired.");
+      }
+
       return toPublicUser(user);
     },
   };

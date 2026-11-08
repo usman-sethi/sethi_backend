@@ -16,7 +16,9 @@ const user: AuthUserRecord = {
   id: "user-123",
   email: "user@example.com",
   passwordHash: "never-return-this",
-  emailVerified: false,
+  emailVerified: true,
+  emailVerifiedAt: new Date("2026-01-01T00:00:00.000Z"),
+  role: "user",
   createdAt: new Date("2026-01-01T00:00:00.000Z"),
   updatedAt: new Date("2026-01-01T00:00:00.000Z"),
 };
@@ -46,6 +48,8 @@ function createGuard() {
     findByEmail: vi.fn(async () => null),
     findById: vi.fn(async (id) => id === user.id ? user : null),
     create: vi.fn(),
+    list: vi.fn(async () => []),
+    setRole: vi.fn(),
   };
   const tokens = {
     createAccessToken: vi.fn(async () => "unused"),

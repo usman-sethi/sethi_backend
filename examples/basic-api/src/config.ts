@@ -34,6 +34,39 @@ const mongoUriSchema = z
     },
   );
 
+const optionalEnvironmentString = z.preprocess(
+  (value) => typeof value === "string" && value.trim() === ""
+    ? undefined
+    : value,
+  z.string().trim().min(1).optional(),
+);
+
+const optionalUrlSchema = optionalEnvironmentString.refine((value) => {
+  if (!value) {
+    return true;
+  }
+  try {
+    const url = new URL(value);
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash
+    );
+  } catch {
+    return false;
+  }
+}, "APP_BASE_URL must be an HTTP(S) URL without credentials, query, or fragment.");
+
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Environment configuration schema.
  */
@@ -87,6 +120,82 @@ const environmentSchema = z.object({
         .map((origin) => origin.trim())
         .filter(Boolean),
     ),
+
+  SMTP_HOST: optionalEnvironmentString,
+  SMTP_PORT: z.preprocess(
+    (value) => typeof value === "string" && value.trim() === ""
+      ? undefined
+      : value,
+    z.coerce.number().int().min(1).max(65535).default(587),
+  ),
+  SMTP_SECURE: z.preprocess(
+    (value) => typeof value === "string" && value.trim() === ""
+      ? undefined
+      : value,
+    z.enum(["true", "false"]).default("false"),
+  ).transform((value) => value === "true"),
+  SMTP_USER: optionalEnvironmentString,
+  SMTP_PASSWORD: optionalEnvironmentString,
+  EMAIL_FROM: optionalEnvironmentString,
+  APP_BASE_URL: optionalUrlSchema,
+  EMAIL_VERIFICATION_TOKEN_TTL_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(60)
+    .max(7 * 24 * 60 * 60)
+    .default(24 * 60 * 60),
+  PASSWORD_RESET_TOKEN_TTL_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(60)
+    .max(7 * 24 * 60 * 60)
+    .default(30 * 60),
+}).superRefine((env, context) => {
+  if (
+    env.NODE_ENV === "production" &&
+    env.APP_BASE_URL &&
+    !isHttpsUrl(env.APP_BASE_URL)
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["APP_BASE_URL"],
+      message: "APP_BASE_URL must use HTTPS in production.",
+    });
+  }
+  const smtpConfigured = Boolean(
+    env.SMTP_HOST || env.SMTP_USER || env.SMTP_PASSWORD || env.EMAIL_FROM,
+  );
+  if (!smtpConfigured) {
+    return;
+  }
+  if (!env.SMTP_HOST) {
+    context.addIssue({
+      code: "custom",
+      path: ["SMTP_HOST"],
+      message: "SMTP_HOST is required when SMTP is configured.",
+    });
+  }
+  if (!env.EMAIL_FROM) {
+    context.addIssue({
+      code: "custom",
+      path: ["EMAIL_FROM"],
+      message: "EMAIL_FROM is required when SMTP is configured.",
+    });
+  }
+  if (Boolean(env.SMTP_USER) !== Boolean(env.SMTP_PASSWORD)) {
+    context.addIssue({
+      code: "custom",
+      path: ["SMTP_USER"],
+      message: "SMTP_USER and SMTP_PASSWORD must be configured together.",
+    });
+  }
+  if (!env.APP_BASE_URL) {
+    context.addIssue({
+      code: "custom",
+      path: ["APP_BASE_URL"],
+      message: "APP_BASE_URL is required when SMTP is configured.",
+    });
+  }
 });
 
 /**
@@ -123,6 +232,24 @@ export function loadAppConfig(
 
     httpSecurity: {
       corsOrigins,
+    },
+
+    email: {
+      appBaseUrl: env.APP_BASE_URL,
+      emailVerificationTokenTtlSeconds:
+        env.EMAIL_VERIFICATION_TOKEN_TTL_SECONDS,
+      passwordResetTokenTtlSeconds:
+        env.PASSWORD_RESET_TOKEN_TTL_SECONDS,
+      smtp: env.SMTP_HOST && env.EMAIL_FROM
+        ? {
+          host: env.SMTP_HOST,
+          port: env.SMTP_PORT,
+          secure: env.SMTP_SECURE,
+          from: env.EMAIL_FROM,
+          ...(env.SMTP_USER ? { username: env.SMTP_USER } : {}),
+          ...(env.SMTP_PASSWORD ? { password: env.SMTP_PASSWORD } : {}),
+        }
+        : undefined,
     },
   };
 }

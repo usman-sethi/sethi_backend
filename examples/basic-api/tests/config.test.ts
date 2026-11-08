@@ -41,6 +41,12 @@ describe("Application Configuration", () => {
         audience: "sethi-backend-api",
         accessTokenTtlSeconds: 900,
       },
+      email: {
+        appBaseUrl: undefined,
+        emailVerificationTokenTtlSeconds: 86400,
+        passwordResetTokenTtlSeconds: 1800,
+        smtp: undefined,
+      },
     });
   });
 
@@ -77,6 +83,12 @@ describe("Application Configuration", () => {
         issuer: "sethi-backend",
         audience: "sethi-backend-api",
         accessTokenTtlSeconds: 900,
+      },
+      email: {
+        appBaseUrl: undefined,
+        emailVerificationTokenTtlSeconds: 86400,
+        passwordResetTokenTtlSeconds: 1800,
+        smtp: undefined,
       },
     });
   });
@@ -135,5 +147,39 @@ describe("Application Configuration", () => {
     expect(() =>
       loadAppConfig({}),
     ).toThrow("MONGODB_URI");
+  });
+
+  it("validates complete SMTP settings and application URL", () => {
+    const config = loadAppConfig({
+      MONGODB_URI: validMongoUri,
+      JWT_SECRET: testJwtSecret,
+      SMTP_HOST: "smtp.example.com",
+      SMTP_PORT: "465",
+      SMTP_SECURE: "true",
+      SMTP_USER: "smtp-user",
+      SMTP_PASSWORD: "smtp-password",
+      EMAIL_FROM: "no-reply@example.com",
+      APP_BASE_URL: "https://frontend.example",
+    });
+
+    expect(config.email).toEqual({
+      appBaseUrl: "https://frontend.example",
+      emailVerificationTokenTtlSeconds: 86400,
+      passwordResetTokenTtlSeconds: 1800,
+      smtp: {
+        host: "smtp.example.com",
+        port: 465,
+        secure: true,
+        from: "no-reply@example.com",
+        username: "smtp-user",
+        password: "smtp-password",
+      },
+    });
+    expect(() => loadAppConfig({
+      MONGODB_URI: validMongoUri,
+      JWT_SECRET: testJwtSecret,
+      SMTP_HOST: "smtp.example.com",
+      EMAIL_FROM: "no-reply@example.com",
+    })).toThrow("APP_BASE_URL");
   });
 });

@@ -14,13 +14,16 @@ import {
 
 import {
   createMongoDatabaseAdapter,
+  createMongoAuthActionTokenRepository,
   createMongoAuthSessionRepository,
   createMongoAuthUserRepository,
 } from "@sethi-backend/database-mongodb";
+import { createSmtpEmailSender } from "@sethi-backend/email";
 import { createPasswordHasher, createTokenService } from "@sethi-backend/security";
 
 import { loadAppConfig } from "./config.js";
 import { registerAuthRoutes } from "./auth-routes.js";
+import { registerAdminRoutes } from "./admin-routes.js";
 
 /**
  * Start the Sethi Backend application.
@@ -36,11 +39,19 @@ async function main(): Promise<void> {
   });
   const users = createMongoAuthUserRepository({
     getDatabase: () => database.getDatabase(),
+    getClient: () => database.getClient(),
   });
   const sessions = createMongoAuthSessionRepository({
     getDatabase: () => database.getDatabase(),
   });
+  const actionTokens = createMongoAuthActionTokenRepository({
+    getDatabase: () => database.getDatabase(),
+    getClient: () => database.getClient(),
+  });
   const tokens = createTokenService(config.tokens);
+  const emailSender = config.email.smtp
+    ? createSmtpEmailSender(config.email.smtp)
+    : undefined;
 
   // 3. Create and secure the Fastify adapter before wiring sanitized auth logs.
   const http = createFastifyAdapter({
@@ -62,8 +73,17 @@ async function main(): Promise<void> {
   const authService = await createAuthService({
     users,
     sessions,
+    actionTokens,
     passwordHasher: createPasswordHasher(),
     tokens,
+    ...(emailSender ? { emailSender } : {}),
+    ...(config.email.appBaseUrl
+      ? { appBaseUrl: config.email.appBaseUrl }
+      : {}),
+    emailVerificationTokenTtlSeconds:
+      config.email.emailVerificationTokenTtlSeconds,
+    passwordResetTokenTtlSeconds:
+      config.email.passwordResetTokenTtlSeconds,
     securityEventLogger,
   });
   const authGuard = createAuthenticationGuard({
@@ -77,6 +97,7 @@ async function main(): Promise<void> {
     await Promise.all([
       users.ensureIndexes(),
       sessions.ensureIndexes(),
+      actionTokens.ensureIndexes(),
     ]);
   });
 
@@ -85,6 +106,11 @@ async function main(): Promise<void> {
     guard: authGuard,
     environment: config.environment,
     csrfProtection: createCsrfProtectionHook(http.instance),
+  });
+  registerAdminRoutes(http.instance, {
+    guard: authGuard,
+    users,
+    service: authService,
   });
 
   // 4. Register a CSRF token endpoint for cookie-authenticated clients.

@@ -27,5 +27,30 @@ export const loginSchema = z
   })
   .strict();
 
+export const emailInputSchema = z
+  .object({
+    email: z
+      .string()
+      .trim()
+      .pipe(z.email())
+      .transform((email) => email.toLowerCase()),
+  })
+  .strict();
+
+export const verificationTokenSchema = z
+  .object({
+    token: z.string().min(1).max(512),
+  })
+  .strict();
+
+export const passwordResetSchema = z
+  .object({
+    token: z.string().min(1).max(512),
+    newPassword: passwordSchema,
+  })
+  .strict();
+
 export type RegistrationInput = z.output<typeof registrationSchema>;
 export type LoginInput = z.output<typeof loginSchema>;
+export type EmailInput = z.output<typeof emailInputSchema>;
+export type PasswordResetInput = z.output<typeof passwordResetSchema>;

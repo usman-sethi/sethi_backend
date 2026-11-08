@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   beforeEach,
   describe,
@@ -11,8 +12,12 @@ import {
   AuthValidationError,
   AuthRepositoryError,
   DuplicateUserError,
+  ForbiddenError,
   InvalidRefreshTokenError,
+  InvalidActionTokenError,
   InvalidCredentialsError,
+  roleHasPermission,
+  requireRole,
   type AuthUserRecord,
   type AuthSessionRecord,
   type AuthUserRepository,
@@ -148,10 +153,107 @@ function createHarness() {
       usersById.set(user.id, user);
       return user;
     }),
+    list: vi.fn(async () => [...usersById.values()].map(({ passwordHash: _hash, ...user }) => user)),
+    setRole: vi.fn(async (userId, role, _updatedAt, actorUserId) => {
+      if (actorUserId === userId) {
+        return { status: "actor_not_admin" as const };
+      }
+      const user = usersById.get(userId);
+      if (!user) {
+        return { status: "not_found" as const };
+      }
+      const previousRole = user.role;
+      user.role = role;
+      return {
+        status: "updated" as const,
+        user: (({ passwordHash: _hash, ...publicUser }) => publicUser)(user),
+        previousRole,
+      };
+    }),
+  };
+  const actionRecords = new Map<string, {
+    userId: string;
+    tokenHash: string;
+    purpose: "email-verification" | "password-reset";
+    expiresAt: Date;
+    consumedAt: Date | null;
+    createdAt: Date;
+  }>();
+  const actionTokens = {
+    ensureIndexes: vi.fn(async () => undefined),
+    replaceForUser: vi.fn(async (input: {
+      userId: string;
+      tokenHash: string;
+      purpose: "email-verification" | "password-reset";
+      expiresAt: Date;
+      consumedAt: Date | null;
+      createdAt: Date;
+    }) => {
+      actionRecords.set(`${input.userId}:${input.purpose}`, input);
+    }),
+    findByHash: vi.fn(async (hash: string) =>
+      [...actionRecords.values()].find((record) => record.tokenHash === hash) ?? null
+    ),
+    verifyEmail: vi.fn(async (tokenHash: string, now: Date) => {
+      const record = [...actionRecords.values()].find((item) =>
+        item.tokenHash === tokenHash &&
+        item.purpose === "email-verification" &&
+        item.consumedAt === null &&
+        item.expiresAt > now
+      );
+      if (!record) {
+        return false;
+      }
+      record.consumedAt = now;
+      const user = usersById.get(record.userId);
+      if (!user || user.emailVerified) {
+        return false;
+      }
+      user.emailVerified = true;
+      user.emailVerifiedAt = now;
+      return true;
+    }),
+    resetPassword: vi.fn(async (input: {
+      tokenHash: string;
+      passwordHash: string;
+      now: Date;
+    }) => {
+      const record = [...actionRecords.values()].find((item) =>
+        item.tokenHash === input.tokenHash &&
+        item.purpose === "password-reset" &&
+        item.consumedAt === null &&
+        item.expiresAt > input.now
+      );
+      if (!record) {
+        return false;
+      }
+      const user = usersById.get(record.userId);
+      if (!user) {
+        return false;
+      }
+      record.consumedAt = input.now;
+      user.passwordHash = input.passwordHash;
+      for (const session of sessionsById.values()) {
+        if (session.userId === user.id) {
+          session.revokedAt = input.now;
+        }
+      }
+      return true;
+    }),
+  };
+  const emailMessages: Array<{ to: string; subject: string; text: string; html: string }> = [];
+  const emailSender = {
+    send: vi.fn(async (message: typeof emailMessages[number]) => {
+      emailMessages.push(message);
+    }),
   };
 
   return {
     users,
+    actionTokens,
+    emailMessages,
+    emailSender,
+    actionRecords,
     usersByEmail,
     usersById,
     passwordHasher,
@@ -167,11 +269,59 @@ function createHarness() {
       createAuthService({
         users,
         sessions,
+        actionTokens,
         passwordHasher,
         tokens,
+        emailSender,
+        appBaseUrl: "https://frontend.example",
         securityEventLogger,
       }),
   };
+}
+
+function getEmailToken(harness: ReturnType<typeof createHarness>, index = -1): string {
+  const email = harness.emailMessages.at(index);
+  const link = email?.html.match(/href="([^"]+)"/)?.[1];
+  if (!link) {
+    throw new Error("Expected an email action link.");
+  }
+  const token = new URL(link).hash.slice(1);
+  const parsed = new URLSearchParams(token).get("token");
+  if (!parsed) {
+    throw new Error("Expected an action token in the URL fragment.");
+  }
+  return parsed;
+}
+
+function createHashForToken(token: string): string {
+  return createHash("sha256").update(token, "utf8").digest("hex");
+}
+
+async function verifyUser(
+  service: Awaited<ReturnType<ReturnType<typeof createHarness>["createService"]>>,
+  harness: ReturnType<typeof createHarness>,
+): Promise<void> {
+  await service.verifyEmail({ token: getEmailToken(harness) });
+}
+
+async function registerVerifiedUser(
+  service: Awaited<ReturnType<ReturnType<typeof createHarness>["createService"]>>,
+  harness: ReturnType<typeof createHarness>,
+  email = "user@example.com",
+  password = "a secure passphrase 123",
+): Promise<void> {
+  await service.register({ email, password });
+  await verifyUser(service, harness);
+}
+
+async function registerAndLogin(
+  service: Awaited<ReturnType<ReturnType<typeof createHarness>["createService"]>>,
+  harness: ReturnType<typeof createHarness>,
+  email = "user@example.com",
+  password = "a secure passphrase 123",
+): Promise<void> {
+  await registerVerifiedUser(service, harness, email, password);
+  await service.login({ email, password });
 }
 
 describe("Authentication service", () => {
@@ -181,9 +331,9 @@ describe("Authentication service", () => {
     harness = createHarness();
   });
 
-  it("normalizes email, hashes password, and returns only public user data", async () => {
+  it("normalizes email, hashes password and issues a verification email without creating a session", async () => {
     const service = await harness.createService();
-    const result = await service.register({
+    await service.register({
       email: "  User@Example.COM ",
       password: "a secure passphrase 123",
     });
@@ -193,16 +343,25 @@ describe("Authentication service", () => {
         email: "user@example.com",
         passwordHash: "hash:a secure passphrase 123",
         emailVerified: false,
+        emailVerifiedAt: null,
+        role: "user",
       }),
     );
-    expect(result.accessToken).toBe("access:user-1");
-    expect(result.user).toMatchObject({
-      id: "user-1",
-      email: "user@example.com",
-      emailVerified: false,
+    expect(harness.sessions.create).not.toHaveBeenCalled();
+    expect(harness.emailMessages[0]).toMatchObject({
+      to: "user@example.com",
+      subject: "Verify your email address",
     });
-    expect(result.user).not.toHaveProperty("passwordHash");
-    expect(JSON.stringify(result)).not.toContain("hash:");
+    const token = getEmailToken(harness);
+    expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(await harness.actionTokens.findByHash(
+      createHashForToken(token),
+    )).toMatchObject({ purpose: "email-verification" });
+    await service.verifyEmail({ token });
+    expect(harness.usersByEmail.get("user@example.com")).toMatchObject({
+      emailVerified: true,
+      emailVerifiedAt: expect.any(Date),
+    });
   });
 
   it("rejects short passwords and unexpected registration properties", async () => {
@@ -226,27 +385,23 @@ describe("Authentication service", () => {
     expect(harness.users.create).not.toHaveBeenCalled();
   });
 
-  it("maps duplicate repository records to a predictable conflict error", async () => {
+  it("returns a generic result for duplicate normalized registrations", async () => {
     const service = await harness.createService();
     await service.register({
       email: "user@example.com",
       password: "a secure passphrase 123",
     });
 
-    await expect(
-      service.register({
-        email: "USER@example.com",
-        password: "another secure passphrase 456",
-      }),
-    ).rejects.toBeInstanceOf(DuplicateUserError);
+    await expect(service.register({
+      email: "USER@example.com",
+      password: "another secure passphrase 456",
+    })).resolves.toBeUndefined();
+    expect(harness.usersByEmail.size).toBe(1);
   });
 
   it("logs in with normalized email and valid password", async () => {
     const service = await harness.createService();
-    await service.register({
-      email: "user@example.com",
-      password: "a secure passphrase 123",
-    });
+    await registerVerifiedUser(service, harness);
 
     const result = await service.login({
       email: " USER@Example.com ",
@@ -279,10 +434,7 @@ describe("Authentication service", () => {
 
   it("returns the same public error for a wrong password", async () => {
     const service = await harness.createService();
-    await service.register({
-      email: "user@example.com",
-      password: "a secure passphrase 123",
-    });
+    await registerVerifiedUser(service, harness);
 
     await expect(
       service.login({
@@ -304,12 +456,13 @@ describe("Authentication service", () => {
     expect(harness.passwordHasher.hash).toHaveBeenLastCalledWith(password);
   });
 
-  it("creates a persistent session and returns a refresh token for cookie transport", async () => {
+  it("creates a persistent session only after email verification and login", async () => {
     const service = await harness.createService();
-    const result = await service.register({
+    await expect(service.login({
       email: "user@example.com",
       password: "a secure passphrase 123",
-    });
+    })).rejects.toBeInstanceOf(InvalidCredentialsError);
+    await registerAndLogin(service, harness);
 
     expect(harness.sessions.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -322,7 +475,7 @@ describe("Authentication service", () => {
       "user-1",
       "session-1",
     );
-    expect(result.refreshToken).toBe("refresh-token");
+    expect(harness.usersByEmail.get("user@example.com")?.emailVerified).toBe(true);
   });
 
   it("rotates refresh tokens and revokes the session when an old token is replayed", async () => {
@@ -330,10 +483,7 @@ describe("Authentication service", () => {
     const service = await harness.createService((event) => {
       securityEvents.push(event);
     });
-    await service.register({
-      email: "user@example.com",
-      password: "a secure passphrase 123",
-    });
+    await registerAndLogin(service, harness);
     harness.tokens.createRefreshToken.mockReturnValueOnce("rotated-token");
 
     const result = await service.refresh("refresh-token");
@@ -362,10 +512,7 @@ describe("Authentication service", () => {
     const service = await harness.createService((event) => {
       securityEvents.push(event);
     });
-    await service.register({
-      email: "user@example.com",
-      password: "a secure passphrase 123",
-    });
+    await registerAndLogin(service, harness);
     harness.tokens.createRefreshToken
       .mockReturnValueOnce("refresh-B")
       .mockReturnValueOnce("refresh-C");
@@ -385,10 +532,7 @@ describe("Authentication service", () => {
 
   it("allows only one concurrent rotation and revokes the family on reuse", async () => {
     const service = await harness.createService();
-    await service.register({
-      email: "user@example.com",
-      password: "a secure passphrase 123",
-    });
+    await registerAndLogin(service, harness);
     harness.tokens.createRefreshToken
       .mockReturnValueOnce("refresh-B")
       .mockReturnValueOnce("refresh-C");
@@ -406,10 +550,7 @@ describe("Authentication service", () => {
 
   it("fails closed when atomic rotation reports a database failure", async () => {
     const service = await harness.createService();
-    await service.register({
-      email: "user@example.com",
-      password: "a secure passphrase 123",
-    });
+    await registerAndLogin(service, harness);
     harness.sessions.rotateRefreshToken.mockRejectedValue(
       new Error("database write failed"),
     );
@@ -423,10 +564,7 @@ describe("Authentication service", () => {
 
   it("rejects expired sessions before attempting a token rotation", async () => {
     const service = await harness.createService();
-    await service.register({
-      email: "user@example.com",
-      password: "a secure passphrase 123",
-    });
+    await registerAndLogin(service, harness);
     const session = harness.sessionsById.get("session-1")!;
     session.expiresAt = new Date(Date.now() - 1);
 
@@ -441,10 +579,7 @@ describe("Authentication service", () => {
     const service = await harness.createService((event) => {
       securityEvents.push(event);
     });
-    await service.register({
-      email: "user@example.com",
-      password: "a secure passphrase 123",
-    });
+    await registerAndLogin(service, harness);
     const session = harness.sessionsById.get("session-1")!;
     harness.sessions.rotateRefreshToken.mockResolvedValueOnce({
       status: "rotation_limit",
@@ -467,15 +602,161 @@ describe("Authentication service", () => {
 
   it("revokes a newly-created session when access-token signing fails", async () => {
     const service = await harness.createService();
+    await registerVerifiedUser(service, harness);
     harness.tokens.createAccessToken.mockRejectedValueOnce(
       new Error("signing failed"),
     );
 
-    await expect(service.register({
+    await expect(service.login({
       email: "user@example.com",
       password: "a secure passphrase 123",
     })).rejects.toThrow("signing failed");
     expect(harness.sessionsById.get("session-1")?.revokedAt)
       .toBeInstanceOf(Date);
+  });
+
+  it("rejects unknown, expired and reused email-verification tokens", async () => {
+    const service = await harness.createService();
+    await expect(service.verifyEmail({ token: "unknown-token" }))
+      .rejects.toBeInstanceOf(InvalidActionTokenError);
+
+    await service.register({
+      email: "expired@example.com",
+      password: "a secure passphrase 123",
+    });
+    const expiredRecord = harness.actionRecords.get("user-1:email-verification");
+    if (!expiredRecord) {
+      throw new Error("Expected an issued email-verification token.");
+    }
+    const expiredToken = getEmailToken(harness);
+    expiredRecord.expiresAt = new Date(Date.now() - 1);
+    await expect(service.verifyEmail({ token: expiredToken }))
+      .rejects.toBeInstanceOf(InvalidActionTokenError);
+
+    await service.resendVerification({ email: "EXPIRED@example.com" });
+    const currentToken = getEmailToken(harness);
+    await service.verifyEmail({ token: currentToken });
+    await expect(service.verifyEmail({ token: currentToken }))
+      .rejects.toBeInstanceOf(InvalidActionTokenError);
+  });
+
+  it("resends a fresh token and treats unknown or already-verified accounts generically", async () => {
+    const service = await harness.createService();
+    await service.register({
+      email: "resend@example.com",
+      password: "a secure passphrase 123",
+    });
+    const oldToken = getEmailToken(harness);
+    await service.resendVerification({ email: " RESEND@example.com " });
+    const newToken = getEmailToken(harness);
+    expect(newToken).not.toBe(oldToken);
+    await expect(service.verifyEmail({ token: oldToken }))
+      .rejects.toBeInstanceOf(InvalidActionTokenError);
+    await service.verifyEmail({ token: newToken });
+    const emailCount = harness.emailMessages.length;
+    await service.resendVerification({ email: "missing@example.com" });
+    await service.resendVerification({ email: "resend@example.com" });
+    expect(harness.emailMessages).toHaveLength(emailCount);
+  });
+
+  it("keeps a registration and retryable token when email delivery fails", async () => {
+    const service = await harness.createService();
+    harness.emailSender.send.mockRejectedValueOnce(
+      new Error("SMTP password must not be exposed"),
+    );
+    await expect(service.register({
+      email: "retry@example.com",
+      password: "a secure passphrase 123",
+    })).resolves.toBeUndefined();
+    expect(harness.actionRecords.has("user-1:email-verification")).toBe(true);
+
+    await service.resendVerification({ email: "retry@example.com" });
+    expect(harness.emailMessages.at(-1)?.to).toBe("retry@example.com");
+    expect(harness.usersByEmail.get("retry@example.com")?.emailVerified).toBe(false);
+  });
+
+  it("resets passwords once and revokes existing sessions", async () => {
+    const service = await harness.createService();
+    await registerAndLogin(service, harness);
+    await service.requestPasswordReset({ email: " USER@example.com " });
+    const token = getEmailToken(harness);
+
+    await service.resetPassword({
+      token,
+      newPassword: "a brand new secure passphrase 456",
+    });
+    expect(harness.usersByEmail.get("user@example.com")?.passwordHash)
+      .toBe("hash:a brand new secure passphrase 456");
+    expect(harness.sessionsById.get("session-1")?.revokedAt)
+      .toBeInstanceOf(Date);
+    await expect(service.resetPassword({
+      token,
+      newPassword: "another strong password 789",
+    })).rejects.toBeInstanceOf(InvalidActionTokenError);
+    await expect(service.login({
+      email: "user@example.com",
+      password: "a secure passphrase 123",
+    })).rejects.toBeInstanceOf(InvalidCredentialsError);
+    await expect(service.login({
+      email: "user@example.com",
+      password: "a brand new secure passphrase 456",
+    })).resolves.toMatchObject({
+      user: { email: "user@example.com" },
+    });
+  });
+
+  it("allows only one concurrent reset-token consumption", async () => {
+    const service = await harness.createService();
+    await registerVerifiedUser(service, harness);
+    await service.requestPasswordReset({ email: "user@example.com" });
+    const token = getEmailToken(harness);
+    const reset = () => service.resetPassword({
+      token,
+      newPassword: "a concurrent safe new password 456",
+    });
+    const results = await Promise.allSettled([reset(), reset()]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+  });
+
+  it("invalidates old reset tokens and explicitly rejects expired tokens", async () => {
+    const service = await harness.createService();
+    await registerVerifiedUser(service, harness);
+    await service.requestPasswordReset({ email: "user@example.com" });
+    const firstToken = getEmailToken(harness);
+    await service.requestPasswordReset({ email: "user@example.com" });
+    const currentToken = getEmailToken(harness);
+
+    await expect(service.resetPassword({
+      token: firstToken,
+      newPassword: "a valid new password 456",
+    })).rejects.toBeInstanceOf(InvalidActionTokenError);
+
+    const record = harness.actionRecords.get("user-1:password-reset");
+    if (!record) {
+      throw new Error("Expected an issued password-reset token.");
+    }
+    record.expiresAt = new Date(Date.now() - 1);
+    await expect(service.resetPassword({
+      token: currentToken,
+      newPassword: "another valid new password 789",
+    })).rejects.toBeInstanceOf(InvalidActionTokenError);
+  });
+
+  it("assigns the user role server-side and resolves permissions centrally", async () => {
+    const service = await harness.createService();
+    await service.register({
+      email: "role@example.com",
+      password: "a secure passphrase 123",
+    });
+    expect(harness.usersByEmail.get("role@example.com")?.role).toBe("user");
+    expect(roleHasPermission("moderator", "users:read")).toBe(true);
+    expect(roleHasPermission("moderator", "roles:manage")).toBe(false);
+    expect(roleHasPermission("admin", "roles:manage")).toBe(true);
+    expect(() => requireRole({ role: "user" }, "admin"))
+      .toThrow(ForbiddenError);
+
+    await expect(service.changeUserRole("user-1", "admin", "user-1"))
+      .rejects.toBeInstanceOf(ForbiddenError);
   });
 });

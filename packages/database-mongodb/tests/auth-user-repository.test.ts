@@ -18,6 +18,9 @@ const mocks = vi.hoisted(() => ({
   createIndex: vi.fn(),
   findOne: vi.fn(),
   insertOne: vi.fn(),
+  updateOne: vi.fn(),
+  updateMany: vi.fn(),
+  find: vi.fn(),
   collection: vi.fn(),
 }));
 
@@ -26,6 +29,9 @@ describe("MongoDB auth user repository", () => {
     createIndex: mocks.createIndex,
     findOne: mocks.findOne,
     insertOne: mocks.insertOne,
+    updateOne: mocks.updateOne,
+    updateMany: mocks.updateMany,
+    find: mocks.find,
   };
   const database = {
     collection: mocks.collection,
@@ -36,11 +42,19 @@ describe("MongoDB auth user repository", () => {
     mocks.collection.mockReturnValue(collection);
     mocks.createIndex.mockResolvedValue("auth_users_email_unique");
     mocks.findOne.mockResolvedValue(null);
+    mocks.updateOne.mockResolvedValue({ matchedCount: 0 });
+    mocks.updateMany.mockResolvedValue({ modifiedCount: 0 });
   });
 
   function createRepository() {
     return createMongoAuthUserRepository({
       getDatabase: () => database,
+      getClient: () => ({
+        startSession: () => ({
+          withTransaction: async (operation: () => Promise<void>) => operation(),
+          endSession: async () => undefined,
+        }),
+      } as never),
     });
   }
 
@@ -53,6 +67,10 @@ describe("MongoDB auth user repository", () => {
     expect(mocks.createIndex).toHaveBeenCalledWith(
       { email: 1 },
       { unique: true, name: "auth_users_email_unique" },
+    );
+    expect(mocks.updateMany).toHaveBeenCalledWith(
+      { emailVerified: { $exists: false } },
+      { $set: { emailVerified: false } },
     );
   });
 
@@ -86,6 +104,8 @@ describe("MongoDB auth user repository", () => {
       email: "user@example.com",
       passwordHash: "argon-hash",
       emailVerified: false,
+      emailVerifiedAt: null,
+      role: "user",
       createdAt,
       updatedAt: createdAt,
     });

@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
   afterAll,
   beforeAll,
@@ -16,12 +16,16 @@ import {
   createAuthService,
   createAuthenticationGuard,
   DuplicateUserError,
+  InvalidActionTokenError,
   InvalidRefreshTokenError,
 } from "../../auth/src/index.js";
 import { createTokenService } from "../../security/src/index.js";
 import {
   createMongoAuthSessionRepository,
 } from "../src/auth-session-repository.js";
+import {
+  createMongoAuthActionTokenRepository,
+} from "../src/auth-action-token-repository.js";
 import {
   createMongoAuthUserRepository,
 } from "../src/auth-user-repository.js";
@@ -72,10 +76,27 @@ describe.skipIf(!configuredUri)(
     let databaseName: string;
     let users: ReturnType<typeof createMongoAuthUserRepository>;
     let sessions: ReturnType<typeof createMongoAuthSessionRepository>;
+    let actionTokens: ReturnType<typeof createMongoAuthActionTokenRepository>;
+    const emailMessages: Array<{ to: string; subject: string; text: string; html: string }> = [];
+    const emailSender = {
+      send: async (message: typeof emailMessages[number]) => {
+        emailMessages.push(message);
+      },
+    };
+
+    function getClient(): MongoClient {
+      if (!client) {
+        throw new Error("MongoDB integration client is not connected.");
+      }
+      return client;
+    }
 
     beforeAll(async () => {
+      if (!configuredUri || !configuredDatabase) {
+        throw new Error("MongoDB integration configuration is missing.");
+      }
       databaseName = `${configuredDatabase}_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
-      client = new MongoClient(configuredUri!, {
+      client = new MongoClient(configuredUri, {
         serverSelectionTimeoutMS: 3000,
       });
       await client.connect();
@@ -83,15 +104,54 @@ describe.skipIf(!configuredUri)(
       database = client.db(databaseName);
       users = createMongoAuthUserRepository({
         getDatabase: () => database,
+        getClient,
       });
       sessions = createMongoAuthSessionRepository({
         getDatabase: () => database,
       });
+      actionTokens = createMongoAuthActionTokenRepository({
+        getDatabase: () => database,
+        getClient,
+      });
       await Promise.all([
         users.ensureIndexes(),
         sessions.ensureIndexes(),
+        actionTokens.ensureIndexes(),
       ]);
     });
+
+    function emailToken(index = -1): string {
+      const link = emailMessages.at(index)?.html.match(/href="([^"]+)"/)?.[1];
+      if (!link) {
+        throw new Error("Expected an email action link.");
+      }
+      const token = new URLSearchParams(new URL(link).hash.slice(1)).get("token");
+      if (!token) {
+        throw new Error("Expected an action token in the URL fragment.");
+      }
+      return token;
+    }
+
+    async function createAuth() {
+      const tokens = createTokenService({
+        secret: randomBytes(48).toString("base64url"),
+        issuer: "integration-test",
+        audience: "integration-test-api",
+      });
+      const auth = await createAuthService({
+        users,
+        sessions,
+        actionTokens,
+        tokens,
+        passwordHasher: {
+          hash: async (value) => `$test-hash$${value}`,
+          verify: async (value, hash) => hash === `$test-hash$${value}`,
+        },
+        emailSender,
+        appBaseUrl: "https://frontend.example",
+      });
+      return { auth, tokens };
+    }
 
     afterAll(async () => {
       if (client) {
@@ -110,6 +170,8 @@ describe.skipIf(!configuredUri)(
         email,
         passwordHash: "test-password-hash",
         emailVerified: false,
+        emailVerifiedAt: null,
+        role: "user",
         createdAt: now,
         updatedAt: now,
       });
@@ -127,6 +189,8 @@ describe.skipIf(!configuredUri)(
         email,
         passwordHash: "another-test-password-hash",
         emailVerified: false,
+        emailVerifiedAt: null,
+        role: "user",
         createdAt: now,
         updatedAt: now,
       })).rejects.toBeInstanceOf(DuplicateUserError);
@@ -140,29 +204,25 @@ describe.skipIf(!configuredUri)(
     });
 
     it("rotates refresh tokens, detects replay, and rejects revoked access", async () => {
-      const tokens = createTokenService({
-        secret: randomBytes(48).toString("base64url"),
-        issuer: "integration-test",
-        audience: "integration-test-api",
+      const { auth, tokens } = await createAuth();
+      const email = `flow-${randomUUID()}@example.com`;
+      await auth.register({
+        email,
+        password: "integration-only password",
       });
-      const auth = await createAuthService({
-        users,
-        sessions,
-        tokens,
-        passwordHasher: {
-          hash: async (value) => `$test-hash$${value}`,
-          verify: async (value, hash) => hash === `$test-hash$${value}`,
-        },
-      });
-      const registered = await auth.register({
-        email: `flow-${randomUUID()}@example.com`,
+      await auth.verifyEmail({ token: emailToken() });
+      const registered = await auth.login({
+        email,
         password: "integration-only password",
       });
       const sessionLookup = await sessions.findByRefreshTokenHash(
         tokens.hashRefreshToken(registered.refreshToken),
       );
       expect(sessionLookup?.status).toBe("current");
-      const sessionId = sessionLookup!.session.id;
+      if (!sessionLookup) {
+        throw new Error("Expected persisted refresh session.");
+      }
+      const sessionId = sessionLookup.session.id;
 
       const rawTokenBefore = await database.collection("auth_sessions")
         .findOne({ _id: new ObjectId(sessionId) });
@@ -193,22 +253,15 @@ describe.skipIf(!configuredUri)(
     });
 
     it("allows one concurrent consume and revokes the family on the competing reuse", async () => {
-      const tokens = createTokenService({
-        secret: randomBytes(48).toString("base64url"),
-        issuer: "integration-test",
-        audience: "integration-test-api",
+      const { auth, tokens } = await createAuth();
+      const email = `race-${randomUUID()}@example.com`;
+      await auth.register({
+        email,
+        password: "integration-only password",
       });
-      const auth = await createAuthService({
-        users,
-        sessions,
-        tokens,
-        passwordHasher: {
-          hash: async (value) => `$test-hash$${value}`,
-          verify: async (value, hash) => hash === `$test-hash$${value}`,
-        },
-      });
-      const registered = await auth.register({
-        email: `race-${randomUUID()}@example.com`,
+      await auth.verifyEmail({ token: emailToken() });
+      const registered = await auth.login({
+        email,
         password: "integration-only password",
       });
 
@@ -233,6 +286,8 @@ describe.skipIf(!configuredUri)(
         email: `owner-a-${randomUUID()}@example.com`,
         passwordHash: "hash-a",
         emailVerified: false,
+        emailVerifiedAt: null,
+        role: "user",
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -240,6 +295,8 @@ describe.skipIf(!configuredUri)(
         email: `owner-b-${randomUUID()}@example.com`,
         passwordHash: "hash-b",
         emailVerified: false,
+        emailVerifiedAt: null,
+        role: "user",
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -284,11 +341,106 @@ describe.skipIf(!configuredUri)(
       ]));
     });
 
+  it("persists hashed action tokens and transactionally resets password and sessions", async () => {
+    const { auth, tokens } = await createAuth();
+    const email = `reset-${randomUUID()}@example.com`;
+    const oldPassword = "integration-only password";
+    const newPassword = "integration-only replacement password";
+    await auth.register({ email, password: oldPassword });
+    const verificationToken = emailToken();
+    const verificationHash = createHash("sha256")
+      .update(verificationToken, "utf8")
+      .digest("hex");
+    const storedVerification = await database
+      .collection("auth_action_tokens")
+      .findOne({ tokenHash: verificationHash });
+    expect(storedVerification).toMatchObject({
+      purpose: "email-verification",
+      consumedAt: null,
+    });
+    expect(JSON.stringify(storedVerification)).not.toContain(verificationToken);
+
+    await auth.verifyEmail({ token: verificationToken });
+    const login = await auth.login({ email, password: oldPassword });
+    const accessToken = login.accessToken;
+    const refreshHash = tokens.hashRefreshToken(login.refreshToken);
+    const sessionLookup = await sessions.findByRefreshTokenHash(refreshHash);
+    if (!sessionLookup) {
+      throw new Error("Expected a persisted session before password reset.");
+    }
+
+    await auth.requestPasswordReset({ email });
+    const resetToken = emailToken();
+    const resetHash = createHash("sha256")
+      .update(resetToken, "utf8")
+      .digest("hex");
+    const storedReset = await database
+      .collection("auth_action_tokens")
+      .findOne({ tokenHash: resetHash });
+    expect(storedReset).toMatchObject({ purpose: "password-reset" });
+    expect(JSON.stringify(storedReset)).not.toContain(resetToken);
+
+    await auth.resetPassword({ token: resetToken, newPassword });
+    expect((await sessions.findById(sessionLookup.session.id))?.revokedAt)
+      .toBeInstanceOf(Date);
+    const guard = createAuthenticationGuard({
+      users,
+      sessions,
+      tokens,
+    });
+    await expect(guard.authenticate(`Bearer ${accessToken}`)).rejects.toThrow();
+    await expect(auth.login({ email, password: oldPassword }))
+      .rejects.toThrow();
+    await expect(auth.login({ email, password: newPassword }))
+      .resolves.toMatchObject({ user: { email } });
+    await expect(auth.resetPassword({ token: resetToken, newPassword }))
+      .rejects.toBeInstanceOf(InvalidActionTokenError);
+  });
+
+  it("audits role changes and prevents demoting the final administrator", async () => {
+    const now = new Date();
+    const administrator = await users.create({
+      email: `admin-${randomUUID()}@example.com`,
+      passwordHash: "admin-hash",
+      emailVerified: true,
+      emailVerifiedAt: now,
+      role: "user",
+      createdAt: now,
+      updatedAt: now,
+    });
+    const target = await users.create({
+      email: `target-${randomUUID()}@example.com`,
+      passwordHash: "target-hash",
+      emailVerified: true,
+      emailVerifiedAt: now,
+      role: "user",
+      createdAt: now,
+      updatedAt: now,
+    });
+    await expect(users.setRole(administrator.id, "admin", now, null))
+      .resolves.toMatchObject({ status: "updated" });
+    await expect(users.setRole(target.id, "admin", now, administrator.id))
+      .resolves.toMatchObject({ status: "updated" });
+    await expect(users.setRole(administrator.id, "user", now, null))
+      .resolves.toMatchObject({ status: "updated" });
+    await expect(users.setRole(target.id, "user", now, null))
+      .resolves.toMatchObject({ status: "last_admin" });
+
+    const audit = await database.collection("auth_audit_logs").find({
+      type: "user.role_changed",
+    }).toArray();
+    expect(audit.length).toBeGreaterThanOrEqual(3);
+  });
+
+
+
     it("revokes legacy sessions that lack replay history during repository setup", async () => {
       const user = await users.create({
         email: `legacy-${randomUUID()}@example.com`,
         passwordHash: "legacy-hash",
         emailVerified: false,
+        emailVerifiedAt: null,
+        role: "user",
         createdAt: new Date(),
         updatedAt: new Date(),
       });

@@ -39,6 +39,30 @@ export class UnauthorizedError extends AuthError {
   }
 }
 
+export class ForbiddenError extends AuthError {
+  constructor(message = "You are not authorized to perform this action.") {
+    super(message, "AUTH_FORBIDDEN");
+  }
+}
+
+export class InvalidActionTokenError extends AuthError {
+  constructor() {
+    super("The token is invalid, expired, or has already been used.", "AUTH_INVALID_ACTION_TOKEN");
+  }
+}
+
+export class LastAdministratorError extends AuthError {
+  constructor() {
+    super("The final administrator cannot be demoted.", "AUTH_LAST_ADMINISTRATOR");
+  }
+}
+
+export class UnverifiedUserError extends AuthError {
+  constructor() {
+    super("The user's email must be verified before assigning an administrator role.", "AUTH_EMAIL_UNVERIFIED");
+  }
+}
+
 export class UserNotFoundError extends AuthError {
   constructor() {
     super("User was not found.", "AUTH_USER_NOT_FOUND");

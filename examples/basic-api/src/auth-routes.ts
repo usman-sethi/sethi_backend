@@ -2,9 +2,13 @@ import {
   AuthRepositoryError,
   AuthValidationError,
   DuplicateUserError,
+  ForbiddenError,
   InvalidCredentialsError,
+  InvalidActionTokenError,
   InvalidRefreshTokenError,
+  LastAdministratorError,
   UnauthorizedError,
+  UserNotFoundError,
   type AuthService,
   type AuthenticationGuard,
 } from "@sethi-backend/auth";
@@ -45,6 +49,30 @@ function sendAuthError(
         code: error.code,
         message: error.message,
       },
+    });
+  }
+
+  if (error instanceof InvalidActionTokenError) {
+    return reply.code(400).send({
+      error: { code: error.code, message: error.message },
+    });
+  }
+
+  if (error instanceof ForbiddenError) {
+    return reply.code(403).send({
+      error: { code: error.code, message: error.message },
+    });
+  }
+
+  if (error instanceof UserNotFoundError) {
+    return reply.code(404).send({
+      error: { code: error.code, message: error.message },
+    });
+  }
+
+  if (error instanceof LastAdministratorError) {
+    return reply.code(409).send({
+      error: { code: error.code, message: error.message },
     });
   }
 
@@ -129,9 +157,91 @@ export function registerAuthRoutes(
     },
     async (request, reply) => {
       try {
-        const result = await options.service.register(request.body);
-        reply.code(201);
-        return sendAuthenticationResult(reply, result, options.environment);
+        await options.service.register(request.body);
+        reply.header("Cache-Control", "no-store");
+        return reply.code(202).send({
+          message: "If registration can be completed, verification instructions will be sent.",
+        });
+      } catch (error) {
+        return sendAuthError(server, error, reply);
+      }
+    },
+  );
+
+  server.post(
+    "/auth/verify-email",
+    {
+      config: {
+        rateLimit: { max: 10, timeWindow: "1 minute" },
+      },
+    },
+    async (request, reply) => {
+      try {
+        await options.service.verifyEmail(request.body);
+        reply.header("Cache-Control", "no-store");
+        return reply.code(204).send();
+      } catch (error) {
+        return sendAuthError(server, error, reply);
+      }
+    },
+  );
+
+  server.post(
+    "/auth/resend-verification",
+    {
+      config: {
+        rateLimit: { max: 3, timeWindow: "1 minute" },
+      },
+    },
+    async (request, reply) => {
+      try {
+        await options.service.resendVerification(request.body);
+        reply.header("Cache-Control", "no-store");
+        return reply.code(202).send({
+          message: "If an account exists for this email, verification instructions will be sent.",
+        });
+      } catch (error) {
+        return sendAuthError(server, error, reply);
+      }
+    },
+  );
+
+  server.post(
+    "/auth/forgot-password",
+    {
+      config: {
+        rateLimit: { max: 3, timeWindow: "1 minute" },
+      },
+    },
+    async (request, reply) => {
+      try {
+        await options.service.requestPasswordReset(request.body);
+        reply.header("Cache-Control", "no-store");
+        return reply.code(202).send({
+          message: "If an account exists for this email, password reset instructions will be sent.",
+        });
+      } catch (error) {
+        return sendAuthError(server, error, reply);
+      }
+    },
+  );
+
+  server.post(
+    "/auth/reset-password",
+    {
+      config: {
+        rateLimit: { max: 5, timeWindow: "1 minute" },
+      },
+    },
+    async (request, reply) => {
+      try {
+        await options.service.resetPassword(request.body);
+        reply.clearCookie(REFRESH_COOKIE_NAME, {
+          ...getHttpCookieOptions(options.environment),
+          path: "/auth",
+        });
+        reply.header("Cache-Control", "no-store");
+        return reply.code(204).send();
       } catch (error) {
         return sendAuthError(server, error, reply);
       }

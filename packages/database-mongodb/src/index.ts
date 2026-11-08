@@ -12,6 +12,13 @@ export type {
   MongoAuthSessionRepositoryOptions,
 } from "./auth-session-repository.js";
 
+export {
+  createMongoAuthActionTokenRepository,
+} from "./auth-action-token-repository.js";
+export type {
+  MongoAuthActionTokenRepositoryOptions,
+} from "./auth-action-token-repository.js";
+
 import {
   MongoClient,
   type Db,
@@ -37,6 +44,7 @@ export interface MongoDatabaseAdapterOptions {
 export interface MongoDatabaseAdapter
   extends DatabaseAdapter {
   getDatabase(): Db;
+  getClient(): MongoClient;
   isConnected(): boolean;
 }
 
@@ -167,6 +175,12 @@ export function createMongoDatabaseAdapter(
     connect,
     disconnect,
     getDatabase,
+    getClient(): MongoClient {
+      if (!client || state !== "connected") {
+        throw new Error("MongoDB is not connected. Call connect() first.");
+      }
+      return client;
+    },
 
     isConnected(): boolean {
       return state === "connected";

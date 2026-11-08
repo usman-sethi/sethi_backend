@@ -11,7 +11,7 @@
     <a href="https://github.com/usman-sethi/sethi_backend"><img src="https://img.shields.io/badge/pnpm-%3E%3D8.0.0-orange?style=flat-square&logo=pnpm&logoColor=white" alt="pnpm"></a>
     <a href="https://github.com/usman-sethi/sethi_backend"><img src="https://img.shields.io/badge/fastify-v4.x-black?style=flat-square&logo=fastify&logoColor=white" alt="Fastify"></a>
     <a href="https://github.com/usman-sethi/sethi_backend"><img src="https://img.shields.io/badge/mongodb-v6.x-green?style=flat-square&logo=mongodb&logoColor=white" alt="MongoDB"></a>
-    <a href="https://github.com/usman-sethi/sethi_backend"><img src="https://img.shields.io/badge/tests-12%20passing-success?style=flat-square&logo=vitest&logoColor=white" alt="Tests"></a>
+    <a href="https://github.com/usman-sethi/sethi_backend"><img src="https://img.shields.io/badge/tests-123%20passing-success?style=flat-square&logo=vitest&logoColor=white" alt="Tests"></a>
   </p>
 
   <p>
@@ -50,7 +50,7 @@ Sethi Backend is currently in active development. The foundational milestone is 
 | **HTTP Layer** | ✅ Implemented | Fastify server adapter, request/response lifecycle integration. |
 | **Database Layer** | ✅ Implemented | MongoDB adapter, connection management, readiness probes (`/ready`). |
 | **Observability** | ✅ Implemented | `/health` liveness endpoint, `/ready` database check, structured graceful shutdown. |
-| **Security & Auth** | ✅ Implemented | Environment validation, Argon2id password hashing, JWT access tokens, persistent MongoDB sessions with refresh-token rotation/revocation, HttpOnly refresh cookies, CSRF protection, strict CORS and route-level rate limits. |
+| **Security & Auth** | ✅ Implemented | Argon2id, session-bound JWTs, refresh replay protection, email verification, password reset with transactional session revocation, SMTP delivery, persistent RBAC and audited role changes. |
 | **Developer Tooling** | 🚧 Planned | CLI code generators, project scaffolding, advanced documentation & release automation. |
 
 ---
@@ -78,7 +78,11 @@ sethi_backend/
 ├── packages/
 │   ├── core/                  # Application lifecycle and adapter contracts
 │   ├── adapter-fastify/       # Fastify HTTP server implementation
-│   └── database-mongodb/      # MongoDB connection and client manager
+│   ├── database-mongodb/      # MongoDB connection and repositories
+│   ├── auth/                  # Authentication services and RBAC
+│   ├── email/                 # SMTP email sender adapter
+│   ├── security/              # Password hashing and token primitives
+│   └── config/                # Typed environment validation
 │
 ├── examples/
 │   └── basic-api/             # Integrated sample application
@@ -93,6 +97,8 @@ sethi_backend/
 * **`@sethi-backend/core`**: Defines abstract contracts for servers and databases, managing the overarching application startup and shutdown lifecycle.
 * **`@sethi-backend/adapter-fastify`**: Implements the server contract using Fastify, translating HTTP requests and routing lifecycle hooks.
 * **`@sethi-backend/database-mongodb`**: Implements the database contract, handling MongoDB connections, client pooling, and health pinging.
+* **`@sethi-backend/auth`**: Defines authentication, account-action token, and authorization contracts and services.
+* **`@sethi-backend/email`**: Implements SMTP delivery through Nodemailer; delivery is injected into authentication services.
 * **`@sethi-backend/example-basic-api`**: Demonstrates how to wire core services, Fastify, and MongoDB together into a runnable backend application.
 
 ### Dependency Flow Diagram
@@ -100,6 +106,8 @@ sethi_backend/
 ```mermaid
 graph TD
     A[Basic API Application] --> B[Sethi Backend Core]
+    A --> G[Auth Services]
+    A --> H[SMTP Adapter]
     B --> C[Fastify Adapter]
     B --> D[MongoDB Adapter]
     C --> E[HTTP Server / Fastify]
@@ -233,23 +241,29 @@ endpoints:
 | `GET` | `/health` | Application liveness check |
 | `GET` | `/ready` | MongoDB database readiness check |
 | `GET` | `/csrf-token` | Creates a CSRF token for a cookie-authenticated client |
-| `POST` | `/auth/register` | Register, create a persistent session, and return an access token |
+| `POST` | `/auth/register` | Register an unverified user and request an email verification link |
 | `POST` | `/auth/login` | Authenticate and create a separate device session |
 | `POST` | `/auth/refresh` | Rotate the refresh token and issue a new access token |
+| `POST` | `/auth/verify-email` | Consume a one-time email verification token |
+| `POST` | `/auth/resend-verification` | Request another verification email without account disclosure |
+| `POST` | `/auth/forgot-password` | Request a password-reset email with a generic response |
+| `POST` | `/auth/reset-password` | Reset a password and atomically revoke all sessions |
 | `POST` | `/auth/logout` | Revoke the current refresh-token session |
 | `POST` | `/auth/logout-all` | Revoke every active session for the authenticated user |
 | `GET` | `/auth/me` | Return the authenticated user's public profile |
+| `GET` | `/admin/dashboard` | Admin-only dashboard |
+| `GET` | `/admin/users` | List public user records (`users:read`) |
+| `PATCH` | `/admin/users/:userId/role` | Change another verified user's role (`roles:manage`) |
 
-Authentication POST requests require a CSRF token and cookie. Fetch
-`GET /csrf-token`, retain its cookie, and send the returned value in
-`X-CSRF-Token`. Registration and login return the access token and public user
-in JSON; refresh tokens are sent only as HttpOnly, SameSite=Lax cookies scoped
-to `/auth`. Access tokens are bound to persistent sessions, and a revoked or
-expired session invalidates its access tokens. Refresh tokens rotate on every
-refresh, and session records persist only their SHA-256 hashes. The default
-session lifetime is 30 days; MongoDB TTL cleanup is asynchronous.
-If registration succeeds in creating a user but session creation fails, that
-user record remains and can sign in later.
+Cookie-authenticated POST requests (`register`, `login`, `refresh`, `logout`,
+and `logout-all`) require a CSRF token. Fetch `GET /csrf-token`, retain its
+cookie, and send the returned value in `X-CSRF-Token`. Registration returns
+HTTP 202 with a generic message and does not create a session. The user must
+verify the address before login. Login returns an access token and public user;
+refresh tokens are sent only as HttpOnly, SameSite=Lax cookies scoped to
+`/auth`. Access tokens are bound to persistent sessions, and a revoked or
+expired session invalidates them. The default session lifetime is 30 days;
+MongoDB TTL cleanup is asynchronous.
 
 Each successful refresh atomically swaps the current token hash and appends the
 consumed hash to its session document. Reuse of any consumed token is treated as
@@ -292,6 +306,144 @@ send the refresh cookie.
   }
   ```
   > *Note: `/ready` returns HTTP status `503 Service Unavailable` if the MongoDB database connection is dropped or unreachable.*
+
+### Email verification and password reset
+
+Configure outbound SMTP and the frontend URL before using email-dependent
+features. The SMTP adapter sends both HTML and plain-text messages. Verification
+and reset links place the random token in the URL fragment (for example,
+`https://app.example/verify-email#token=...`) so it is not sent in ordinary
+HTTP requests or access logs. The frontend reads the fragment and POSTs the
+token in JSON; the API never consumes tokens from a GET request.
+
+```http
+POST /auth/register
+Content-Type: application/json
+
+{"email":"user@example.com","password":"a long unique passphrase"}
+```
+
+```json
+{"message":"If registration can be completed, verification instructions will be sent."}
+```
+
+Submit the verification token:
+
+```http
+POST /auth/verify-email
+Content-Type: application/json
+
+{"token":"<token read from the URL fragment>"}
+```
+
+A successful verification returns `204 No Content`; invalid, expired, or
+consumed tokens return `400`. `POST /auth/resend-verification` accepts
+`{"email":"user@example.com"}` and always returns the same generic HTTP 202
+response whether the account exists, is verified, or delivery fails.
+
+Password reset uses a generic response for known and unknown addresses:
+
+```http
+POST /auth/forgot-password
+Content-Type: application/json
+
+{"email":"user@example.com"}
+```
+
+```json
+{"message":"If an account exists for this email, password reset instructions will be sent."}
+```
+
+The frontend submits the fragment token and the new password to
+`POST /auth/reset-password`:
+
+```json
+{"token":"<token read from the URL fragment>","newPassword":"a different long unique passphrase"}
+```
+
+Reset tokens expire after 30 minutes by default. Verification tokens expire
+after 24 hours. Both durations are configurable. Only hashes are persisted;
+tokens are replaced on resend, have explicit expiration checks, and are
+consumed once. Password reset hashes the new password before opening a MongoDB
+transaction, then atomically consumes the token, changes the password, and
+revokes every active session. MongoDB must run as a replica set (including a
+single-node replica set) for these transactional operations. If a transaction
+cannot run, the password and token remain unchanged.
+
+Email send failures do not reverse registration or password changes. A user can
+request another email; issuing a new link replaces the prior token. Delivery
+failures are logged with a safe event type and user ID only. This implementation
+sends through SMTP directly and does not provide a durable outbox; after a
+process crash, users can safely request a resend/reset again.
+
+#### Email environment
+
+New optional variables in `.env.example`:
+
+| Variable | Default / example | Use |
+| :--- | :--- | :--- |
+| `SMTP_HOST` | empty | SMTP server hostname |
+| `SMTP_PORT` | `587` | SMTP server port |
+| `SMTP_SECURE` | `false` | Use implicit TLS (typically port 465) |
+| `SMTP_USER` | empty | Optional SMTP username |
+| `SMTP_PASSWORD` | empty | Optional SMTP password; never commit a real value |
+| `EMAIL_FROM` | empty | Sender address, required when SMTP is configured |
+| `APP_BASE_URL` | empty | Frontend origin, required with SMTP; HTTPS is required in production |
+| `EMAIL_VERIFICATION_TOKEN_TTL_SECONDS` | `86400` | Verification token lifetime |
+| `PASSWORD_RESET_TOKEN_TTL_SECONDS` | `1800` | Password-reset token lifetime |
+
+Set `SMTP_HOST`, `EMAIL_FROM`, and `APP_BASE_URL` together. SMTP user/password
+must also be paired. SMTP may be left blank for development and tests, but
+email delivery will be unavailable until it is configured. The app does not
+log SMTP credentials, message links, or tokens.
+
+### Roles and permissions
+
+The role stored in MongoDB is authoritative for each protected request; JWTs
+contain identity/session claims only. The guard checks the current user and
+session, and permission hooks resolve the current role on every request.
+Privilege changes therefore apply to the next request without waiting for an
+access token to expire.
+
+| Role | Permissions |
+| :--- | :--- |
+| `user` | `profile:read`, `profile:update` |
+| `moderator` | User permissions plus `users:read`, `users:manage`, `sessions:revoke` |
+| `admin` | All defined permissions, including `roles:manage` |
+
+Admin dashboard access and role changes require `roles:manage`; user listing
+requires `users:read`. A role change cannot target the acting administrator,
+cannot promote an unverified account, and cannot demote the final admin.
+Successful role changes are written to `auth_audit_logs` in the same MongoDB
+transaction as the role update.
+
+Provision the first admin only after registering and verifying the operator's
+account. Build the example first, then run this local interactive command from
+the repository root:
+
+```powershell
+pnpm --filter @sethi-backend/example-basic-api build
+pnpm --filter @sethi-backend/example-basic-api admin:promote -- --email admin@example.com
+```
+
+It reads the configured MongoDB connection, verifies that the account exists
+and has a verified email, requires exact email confirmation in an interactive
+terminal, and records the promotion in the audit collection. There is no
+unauthenticated admin-promotion HTTP route.
+
+### MongoDB migration and indexes
+
+At startup, `auth_users` documents missing verification state are treated as
+unverified and missing roles are assigned the least-privileged `user` role.
+These migrations do not grant privileges. Active legacy sessions without
+refresh replay history are revoked as documented above.
+
+The application creates `auth_action_tokens` with unique token-hash and
+user/purpose indexes plus an expiry TTL index. It creates role lookup and
+auditing indexes and a lock record used to serialize administrator-role
+changes. TTL indexes are cleanup only; token and session expiration are checked
+explicitly. Ensure the MongoDB deployment supports transactions before
+enabling email verification/password reset or role changes.
 
 ## Fastify HTTP security
 
@@ -344,8 +496,8 @@ pnpm test
 
 ### Test coverage
 The Vitest suite covers core lifecycle behavior, HTTP security and CORS, config
-validation, password/token utilities, authentication routes, session behavior,
-and mocked MongoDB repository operations.
+validation, password/token utilities, SMTP transport behavior, account-action
+flows, RBAC, session behavior, and mocked MongoDB repository operations.
 
 The authentication repository tests use mocks; they do not claim a live
 MongoDB integration test. The Fastify injection tests exercise the complete
@@ -354,10 +506,12 @@ HTTP lifecycle with repository doubles.
 ### Optional real MongoDB integration
 
 The opt-in suite performs real inserts, unique-index checks, refresh/replay
-operations, and concurrent rotations. It only permits a local MongoDB host and
-requires an explicitly named database ending in `_integration_test`. Each run
-uses a unique temporary database and drops only that database afterward. The
-suite is separate from `pnpm test`.
+operations, transactional email verification and password resets, session
+revocation, and administrator-role integrity checks. It only permits a local
+MongoDB host and requires an explicitly named database ending in
+`_integration_test`. Transactions require that local MongoDB run as a replica
+set. Each run uses a unique temporary database and drops only that database
+afterward. The suite is separate from `pnpm test`.
 
 PowerShell setup and invocation:
 
@@ -367,9 +521,12 @@ $env:TEST_MONGODB_DATABASE = "sethi_backend_integration_test"
 pnpm test:integration
 ```
 
-The real MongoDB suite was not run as part of the default test suite. Configure
-a disposable local MongoDB instance before running it; do not point it at a
-production or shared database.
+Configure a disposable local replica-set MongoDB instance before running the
+real integration suite; do not point it at a production or shared database.
+
+An SMTP smoke test is also opt-in and sends only to the explicitly set
+`TEST_SMTP_RECIPIENT`. Set `SMTP_TEST_ENABLED=true` and SMTP environment values
+for a test account, then run `pnpm test:integration`. It is skipped otherwise.
 
 ---
 
@@ -398,7 +555,7 @@ Sethi Backend listens for termination signals (`SIGINT` and `SIGTERM`). Upon rec
   - User registration & login flows
   - Refresh token rotation
   - Session management & test suites
-- [ ] **Milestone 4 — Advanced Auth & RBAC** *(Planned)*
+- [x] **Milestone 4 — Advanced Auth & RBAC** *(Completed)*
   - Email verification & password reset
   - Role-based access control (RBAC)
   - Security integration testing

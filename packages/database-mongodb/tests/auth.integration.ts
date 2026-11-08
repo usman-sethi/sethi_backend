@@ -18,17 +18,13 @@ import {
   DuplicateUserError,
   InvalidActionTokenError,
   InvalidRefreshTokenError,
-} from "../../auth/src/index.js";
-import { createTokenService } from "../../security/src/index.js";
+} from "@sethi-backend/auth";
+import { createTokenService } from "@sethi-backend/security";
 import {
   createMongoAuthSessionRepository,
-} from "../src/auth-session-repository.js";
-import {
   createMongoAuthActionTokenRepository,
-} from "../src/auth-action-token-repository.js";
-import {
   createMongoAuthUserRepository,
-} from "../src/auth-user-repository.js";
+} from "@sethi-backend/database-mongodb";
 
 const configuredUri = process.env.TEST_MONGODB_URI;
 const configuredDatabase = process.env.TEST_MONGODB_DATABASE;
@@ -48,6 +44,15 @@ function assertSafeTestTarget(uri: string, databaseName: string): void {
   }
 
   const hostname = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (
+    parsed.protocol !== "mongodb:" ||
+    parsed.username ||
+    parsed.password
+  ) {
+    throw new Error(
+      "MongoDB integration tests require a local mongodb:// URI without credentials.",
+    );
+  }
   if (!["localhost", "127.0.0.1", "::1"].includes(hostname)) {
     throw new Error(
       "Real MongoDB integration tests only run against a local MongoDB host.",
@@ -67,7 +72,7 @@ if (configuredUri && configuredDatabase) {
   assertSafeTestTarget(configuredUri, configuredDatabase);
 }
 
-describe.skipIf(!configuredUri)(
+describe(
   "Real MongoDB authentication integration (TEST_MONGODB_URI required)",
   () => {
     let client: MongoClient | undefined;
@@ -155,10 +160,13 @@ describe.skipIf(!configuredUri)(
 
     afterAll(async () => {
       if (client) {
-        if (connected && databaseName) {
-          await client.db(databaseName).dropDatabase();
+        try {
+          if (connected && databaseName) {
+            await client.db(databaseName).dropDatabase();
+          }
+        } finally {
+          await client.close();
         }
-        await client.close();
       }
     });
 
@@ -402,8 +410,8 @@ describe.skipIf(!configuredUri)(
     const administrator = await users.create({
       email: `admin-${randomUUID()}@example.com`,
       passwordHash: "admin-hash",
-      emailVerified: true,
-      emailVerifiedAt: now,
+      emailVerified: false,
+      emailVerifiedAt: null,
       role: "user",
       createdAt: now,
       updatedAt: now,
@@ -411,12 +419,16 @@ describe.skipIf(!configuredUri)(
     const target = await users.create({
       email: `target-${randomUUID()}@example.com`,
       passwordHash: "target-hash",
-      emailVerified: true,
-      emailVerifiedAt: now,
+      emailVerified: false,
+      emailVerifiedAt: null,
       role: "user",
       createdAt: now,
       updatedAt: now,
     });
+    await database.collection("auth_users").updateMany(
+      { _id: { $in: [new ObjectId(administrator.id), new ObjectId(target.id)] } },
+      { $set: { emailVerified: true, emailVerifiedAt: now } },
+    );
     await expect(users.setRole(administrator.id, "admin", now, null))
       .resolves.toMatchObject({ status: "updated" });
     await expect(users.setRole(target.id, "admin", now, administrator.id))

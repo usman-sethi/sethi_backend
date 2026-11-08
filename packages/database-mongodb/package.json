@@ -26,5 +26,9 @@
     "@sethi-backend/auth": "workspace:*",
     "@sethi-backend/core": "workspace:*",
     "mongodb": "^7.8.0"
+  },
+  "devDependencies": {
+    "@sethi-backend/adapter-fastify": "workspace:*",
+    "@sethi-backend/security": "workspace:*"
   }
 }

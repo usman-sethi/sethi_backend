@@ -263,6 +263,13 @@ importers:
       mongodb:
         specifier: ^7.8.0
         version: 7.8.0
+    devDependencies:
+      '@sethi-backend/adapter-fastify':
+        specifier: workspace:*
+        version: link:../adapter-fastify
+      '@sethi-backend/security':
+        specifier: workspace:*
+        version: link:../security
 
   packages/email:
     dependencies:

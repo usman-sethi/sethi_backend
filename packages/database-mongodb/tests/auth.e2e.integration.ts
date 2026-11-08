@@ -12,26 +12,22 @@ import {
   createAuthService,
   createAuthenticationGuard,
   type EmailMessage,
-} from "../../auth/src/index.js";
+} from "@sethi-backend/auth";
 import {
   createPasswordHasher,
   createTokenService,
-} from "../../security/src/index.js";
+} from "@sethi-backend/security";
 import {
   createCsrfProtectionHook,
   createFastifyAdapter,
   generateCsrfToken,
   registerHttpSecurity,
-} from "../../adapter-fastify/src/index.js";
+} from "@sethi-backend/adapter-fastify";
 import {
   createMongoAuthActionTokenRepository,
-} from "../src/auth-action-token-repository.js";
-import {
   createMongoAuthSessionRepository,
-} from "../src/auth-session-repository.js";
-import {
   createMongoAuthUserRepository,
-} from "../src/auth-user-repository.js";
+} from "@sethi-backend/database-mongodb";
 import { registerAdminRoutes } from "../../../examples/basic-api/src/admin-routes.js";
 import { registerAuthRoutes } from "../../../examples/basic-api/src/auth-routes.js";
 
@@ -53,6 +49,15 @@ function assertSafeTestTarget(uri: string, databaseName: string): void {
   }
 
   const hostname = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (
+    parsed.protocol !== "mongodb:" ||
+    parsed.username ||
+    parsed.password
+  ) {
+    throw new Error(
+      "MongoDB HTTP integration tests require a local mongodb:// URI without credentials.",
+    );
+  }
   if (!["localhost", "127.0.0.1", "::1"].includes(hostname)) {
     throw new Error(
       "Real HTTP integration tests only run against a local MongoDB host.",
@@ -72,7 +77,7 @@ if (mongoUri && configuredDatabase) {
   assertSafeTestTarget(mongoUri, configuredDatabase);
 }
 
-describe.skipIf(!mongoUri)(
+describe(
   "Real MongoDB HTTP authentication workflow",
   () => {
     let client: MongoClient | undefined;
@@ -239,10 +244,13 @@ describe.skipIf(!mongoUri)(
     afterAll(async () => {
       await server?.close();
       if (client) {
-        if (databaseName) {
-          await client.db(databaseName).dropDatabase();
+        try {
+          if (databaseName) {
+            await client.db(databaseName).dropDatabase();
+          }
+        } finally {
+          await client.close();
         }
-        await client.close();
       }
     });
 

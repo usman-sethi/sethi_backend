@@ -11,7 +11,11 @@
   "scripts": {
     "build": "pnpm --recursive --if-present build",
     "test": "vitest run",
-    "test:integration": "vitest run --config vitest.integration.config.mts",
+    "test:integration": "pnpm build && vitest run --config vitest.integration.config.mts",
+    "test:services:up": "docker compose -f docker-compose.test.yml up -d --wait mongodb mailpit verdaccio",
+    "test:services:wait": "node scripts/wait-for-test-http-services.mjs",
+    "test:services:down": "docker compose -f docker-compose.test.yml down --volumes",
+    "validate:packages": "node scripts/validate-package-consumer.mjs",
     "test:watch": "vitest",
     "clean": "pnpm --recursive --if-present clean"
   },

@@ -1,0 +1,77 @@
+name: Release validation
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TEST_MONGODB_URI: mongodb://127.0.0.1:27017/?replicaSet=rs0
+      TEST_MONGODB_DATABASE: sethi_ci_integration_test
+      SMTP_TEST_ENABLED: "true"
+      SMTP_HOST: 127.0.0.1
+      SMTP_PORT: "1025"
+      SMTP_SECURE: "false"
+      EMAIL_FROM: no-reply@example.test
+      TEST_SMTP_RECIPIENT: integration@example.test
+      MAILPIT_API_URL: http://127.0.0.1:8025
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.18.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace
+        run: pnpm build
+
+      - name: Run unit tests
+        run: pnpm test
+
+      - name: Start isolated test services
+        run: docker compose -f docker-compose.test.yml up -d --wait mongodb mailpit verdaccio
+
+      - name: Wait for test service APIs
+        run: pnpm test:services:wait
+
+      - name: Run real MongoDB and SMTP integration tests
+        run: pnpm test:integration
+
+      - name: Verify installed packages and consumer API
+        run: node scripts/validate-package-consumer.mjs
+
+      - name: Verify publishable package builds
+        run: pnpm --recursive --filter './packages/*' build
+
+      - name: Check package tarballs
+        shell: bash
+        run: |
+          for package in packages/auth packages/core packages/config packages/security packages/email packages/database-mongodb packages/adapter-fastify; do
+            pnpm --dir "$package" pack --dry-run
+          done
+
+      - name: Audit dependencies
+        run: pnpm audit
+
+      - name: Check diff formatting
+        run: git diff --check
+
+      - name: Stop isolated test services
+        if: always()
+        run: docker compose -f docker-compose.test.yml down --volumes

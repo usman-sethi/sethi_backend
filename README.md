@@ -55,7 +55,7 @@ Sethi Backend is currently in active development. The foundational milestone is 
 | **Database Layer** | ✅ Implemented | MongoDB adapter, connection management, readiness probes (`/ready`). |
 | **Observability** | ✅ Implemented | Server-generated request IDs, duration/error logs with redaction, `/health` liveness, `/ready` database check, structured graceful shutdown. |
 | **Security & Auth** | ✅ Implemented | Argon2id, session-bound JWTs, refresh replay protection, email verification, password reset with transactional session revocation, SMTP delivery, persistent RBAC and audited role changes. |
-| **Release candidate** | 🚧 In progress | Package metadata, production configuration, dependency audit, and real integration suites are being hardened; live MongoDB/SMTP verification remains environment-dependent. |
+| **Release validation** | 🚧 In progress | Required-service integration tests, isolated local package registry, independent consumer workflow, and CI validation are configured; MongoDB and installed-consumer verification must still execute in CI or locally. |
 
 ---
 
@@ -545,31 +545,19 @@ The authentication repository tests use mocks; they do not claim a live
 MongoDB integration test. The Fastify injection tests exercise the complete
 HTTP lifecycle with repository doubles.
 
-### Optional real MongoDB integration
+### Real integration tests and package consumer
 
-The opt-in suites perform real persistence and HTTP authentication flows,
-unique-index checks, token expiration/consumption, refresh/replay operations,
-transactions, session revocation, and RBAC changes. They only permit a local
-MongoDB host and require an explicitly named database ending in
-`_integration_test`. Transactions require a replica set. Each test file uses a
-unique temporary database and drops only that database afterward. The suites
-are separate from `pnpm test`.
+The strict `pnpm test:integration` command requires local MongoDB replica-set,
+Mailpit, and explicit test-only variables. It fails clearly when services are
+missing and does not skip tests. Its nine tests verify real MongoDB persistence
+and transactions, HTTP authentication/RBAC, and delivered SMTP messages.
 
-PowerShell setup and invocation:
-
-```powershell
-$env:TEST_MONGODB_URI = "mongodb://127.0.0.1:27017"
-$env:TEST_MONGODB_DATABASE = "sethi_backend_integration_test"
-pnpm test:integration
-```
-
-See the [integration testing guide](docs/integration-testing.md) for a local
-replica-set setup and disposable SMTP service instructions. Do not point tests
-at a production or shared database.
-
-The SMTP smoke test is also opt-in and sends verification and reset test
-messages only to the explicitly set `TEST_SMTP_RECIPIENT`. It is skipped
-otherwise.
+Run `pnpm test:services:up` and `pnpm test:services:wait`, configure the test
+variables, then run `pnpm test:integration`. `pnpm validate:packages` publishes
+the seven built tarballs only to a loopback Verdaccio registry, installs them
+outside the monorepo, type-checks a consumer, and exercises a real API against
+the same isolated services. See the [integration and package-consumer guide](docs/integration-testing.md)
+for exact commands and cleanup instructions.
 
 ---
 

@@ -8,6 +8,7 @@ const requiredVariables = [
   "EMAIL_FROM",
   "TEST_SMTP_RECIPIENT",
   "MAILPIT_API_URL",
+  "TEST_REDIS_URL",
 ];
 const missingVariables = requiredVariables.filter((name) =>
   !process.env[name]?.trim()
@@ -42,8 +43,7 @@ if (!Number.isInteger(smtpPort) || smtpPort < 1 || smtpPort > 65535) {
 export default defineConfig({
   test: {
     include: [
-      "packages/database-mongodb/tests/**/*.integration.ts",
-      "packages/email/tests/**/*.integration.ts",
+      "packages/**/tests/**/*.integration.ts",
     ],
     environment: "node",
     clearMocks: true,

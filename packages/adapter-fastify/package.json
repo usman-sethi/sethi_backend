@@ -29,6 +29,7 @@
     "@fastify/helmet": "^13.2.0",
     "@fastify/rate-limit": "^10.3.0",
     "@sethi-backend/core": "workspace:*",
-    "fastify": "^5.12.8"
+    "fastify": "^5.12.8",
+    "ioredis": "^5.11.1"
   }
 }

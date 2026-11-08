@@ -5,6 +5,7 @@ import csrfProtection from "@fastify/csrf-protection";
 import type { FastifyHelmetOptions } from "@fastify/helmet";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
+import { Redis } from "ioredis";
 import type {
   FastifyInstance,
   FastifyReply,
@@ -35,6 +36,9 @@ export interface HttpSecurityOptions {
   };
   rateLimit?: {
     enabled?: boolean;
+    store?: "memory" | "redis";
+    redis?: Redis;
+    namespace?: string;
   };
 }
 
@@ -175,6 +179,26 @@ export function registerHttpSecurity(
     throw new Error("The CSRF cookie name cannot be empty.");
   }
 
+  const rateLimitStore = options.rateLimit?.store ??
+    (environment === "production" ? undefined : "memory");
+  if (options.rateLimit?.enabled !== false && environment === "production" &&
+      rateLimitStore !== "redis") {
+    throw new Error(
+      "Production rate limiting requires the explicit Redis store.",
+    );
+  }
+  if (rateLimitStore === "redis" && !options.rateLimit?.redis) {
+    throw new Error(
+      "Redis rate limiting requires a dedicated Redis client.",
+    );
+  }
+  if (
+    options.rateLimit?.namespace !== undefined &&
+    !/^[a-zA-Z0-9:_-]{1,128}$/.test(options.rateLimit.namespace)
+  ) {
+    throw new Error("Rate-limit namespace contains invalid characters.");
+  }
+
   registeredServers.add(server);
   const routeRateLimitHandlers = new Map<
     string,
@@ -232,10 +256,77 @@ export function registerHttpSecurity(
   }
 
   if (options.rateLimit?.enabled !== false) {
+    const redisClient = rateLimitStore === "redis"
+      ? options.rateLimit?.redis
+      : undefined;
+    if (redisClient) {
+      server.addHook("onReady", async () => {
+        if (redisClient.status === "wait") {
+          await redisClient.connect();
+        }
+        if (redisClient.status !== "ready") {
+          throw new Error(
+            "Redis is unavailable; distributed rate limiting cannot start.",
+          );
+        }
+      });
+      server.addHook("onClose", async () => {
+        if (redisClient.status === "ready") {
+          await redisClient.quit();
+        } else {
+          redisClient.disconnect();
+        }
+      });
+    }
     server.register(rateLimit, {
       global: false,
+      skipOnError: false,
+      ...(redisClient
+        ? {
+          redis: redisClient,
+          nameSpace: options.rateLimit?.namespace ?? "sethi:ratelimit:",
+        }
+        : {}),
     });
   }
+}
+
+export interface RedisRateLimitClientOptions {
+  url: string;
+  connectTimeout?: number;
+}
+
+/**
+ * Create a dedicated, lazily connected Redis client for one Fastify instance.
+ * Register it with `registerHttpSecurity`; the server connects before listening
+ * and closes the client during shutdown.
+ */
+export function createRedisRateLimitClient(
+  options: RedisRateLimitClientOptions,
+): Redis {
+  const url = options.url.trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new TypeError("Redis URL must be a valid redis:// or rediss:// URL.");
+  }
+  if (
+    !["redis:", "rediss:"].includes(parsed.protocol) ||
+    !parsed.hostname ||
+    (options.connectTimeout !== undefined &&
+      (!Number.isInteger(options.connectTimeout) ||
+        options.connectTimeout < 100 ||
+        options.connectTimeout > 60_000))
+  ) {
+    throw new TypeError("Redis rate-limit connection options are invalid.");
+  }
+  return new Redis(url, {
+    lazyConnect: true,
+    enableOfflineQueue: false,
+    maxRetriesPerRequest: 1,
+    connectTimeout: options.connectTimeout ?? 5_000,
+  });
 }
 
 /**

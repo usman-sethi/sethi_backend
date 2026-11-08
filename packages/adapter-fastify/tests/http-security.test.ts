@@ -11,6 +11,7 @@ import {
   generateCsrfToken,
   getHttpCookieOptions,
   normalizeAllowedOrigins,
+  createRedisRateLimitClient,
   registerHttpSecurity,
 } from "../src/index.js";
 
@@ -257,6 +258,7 @@ describe("Fastify HTTP security", () => {
     const app = createServer({
       allowedOrigins: ["https://example.com"],
       environment: "production",
+      rateLimit: { enabled: false },
     });
     app.get("/csrf-token", async (_request, reply) => ({
       token: generateCsrfToken(reply),
@@ -292,5 +294,31 @@ describe("Fastify HTTP security", () => {
     const limitedResponse = await app.inject("/limited");
     expect(limitedResponse.statusCode).toBe(429);
     expect(limitedResponse.headers["retry-after"]).toBeDefined();
+  });
+
+  it("requires explicit distributed rate limiting in production", () => {
+    const app = Fastify();
+    server = app;
+    expect(() => registerHttpSecurity(app, {
+      allowedOrigins: ["https://example.com"],
+      environment: "production",
+    })).toThrow("requires the explicit Redis store");
+
+    const redisApp = Fastify();
+    expect(() => registerHttpSecurity(redisApp, {
+      allowedOrigins: ["https://example.com"],
+      environment: "production",
+      rateLimit: { store: "redis" },
+    })).toThrow("requires a dedicated Redis client");
+  });
+
+  it("validates Redis connection URLs without exposing credentials", () => {
+    expect(() => createRedisRateLimitClient({ url: "http://localhost:6379" }))
+      .toThrow("Redis rate-limit connection options are invalid");
+    const client = createRedisRateLimitClient({
+      url: "redis://user:password@127.0.0.1:6379/0",
+    });
+    expect(client.status).toBe("wait");
+    client.disconnect();
   });
 });

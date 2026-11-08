@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 30
     env:
       TEST_MONGODB_URI: mongodb://127.0.0.1:27017/?replicaSet=rs0
@@ -102,6 +102,7 @@ jobs:
           echo "Docker host architecture:"
           docker info --format '{{.Architecture}}' || true
           echo "GitHub runner architecture: ${{ runner.arch }} ($(uname -m))"
+          echo "GitHub runner kernel: $(uname -r)"
           echo "AVX availability:"
           if grep -qm1 -w avx /proc/cpuinfo; then echo "AVX: available"; else echo "AVX: unavailable"; fi
           if grep -qm1 -w avx2 /proc/cpuinfo; then echo "AVX2: available"; else echo "AVX2: unavailable"; fi

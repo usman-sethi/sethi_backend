@@ -119,8 +119,10 @@ transactions is not sufficient.
 and runs frozen installation, build, unit tests, all integration tests, the
 independent package consumer, package dry-runs, dependency auditing, and
 `git diff --check`. It uses only synthetic `.test` addresses and no secrets.
+CI pins Ubuntu 22.04 to avoid the MongoDB 8.0 startup incompatibility reported
+for Linux kernel 6.19 and newer; the MongoDB major version remains unchanged.
 The MongoDB health check only tests `mongod` ping responsiveness. CI initializes
 `rs0` in a separate step with member `127.0.0.1:27017` and waits for
 `db.hello().isWritablePrimary` before running tests. On failure, the workflow
 prints Compose status, MongoDB container logs, image/runner architecture, and
-AVX/AVX2 availability before removing the services.
+the runner kernel and AVX/AVX2 availability before removing the services.

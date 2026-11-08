@@ -3,6 +3,7 @@ import { createBackend } from "@sethi-backend/core";
 import {
   createAuthService,
   createAuthenticationGuard,
+  type AuthSecurityEvent,
 } from "@sethi-backend/auth";
 import {
   createFastifyAdapter,
@@ -40,15 +41,8 @@ async function main(): Promise<void> {
     getDatabase: () => database.getDatabase(),
   });
   const tokens = createTokenService(config.tokens);
-  const authService = await createAuthService({
-    users,
-    sessions,
-    passwordHasher: createPasswordHasher(),
-    tokens,
-  });
-  const authGuard = createAuthenticationGuard({ users, sessions, tokens });
 
-  // 3. Create the Fastify adapter.
+  // 3. Create and secure the Fastify adapter before wiring sanitized auth logs.
   const http = createFastifyAdapter({
     logger: config.environment !== "test",
   });
@@ -56,6 +50,27 @@ async function main(): Promise<void> {
   registerHttpSecurity(http.instance, {
     allowedOrigins: config.httpSecurity.corsOrigins,
     environment: config.environment,
+  });
+
+  const securityEventLogger = (event: AuthSecurityEvent): void => {
+    const { type, ...metadata } = event;
+    http.instance.log.info(
+      { event: `auth.${type}`, ...metadata },
+      "Authentication security event",
+    );
+  };
+  const authService = await createAuthService({
+    users,
+    sessions,
+    passwordHasher: createPasswordHasher(),
+    tokens,
+    securityEventLogger,
+  });
+  const authGuard = createAuthenticationGuard({
+    users,
+    sessions,
+    tokens,
+    securityEventLogger,
   });
 
   http.instance.addHook("onReady", async () => {

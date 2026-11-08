@@ -4,6 +4,7 @@ import {
   expect,
   it,
 } from "vitest";
+import { SignJWT } from "jose";
 
 import { createTokenService } from "../src/token-service.js";
 
@@ -47,6 +48,49 @@ describe("Token Service", () => {
     const token = await first.createAccessToken("user-123");
 
     expect(await second.verifyAccessToken(token)).toBeNull();
+  });
+
+  it("should reject unsupported algorithms and access tokens with missing claims", async () => {
+    const tokens = createTokenService(options);
+    const key = new TextEncoder().encode(options.secret);
+    const now = Math.floor(Date.now() / 1000);
+    const unsupportedAlgorithm = await new SignJWT({
+      tokenUse: "access",
+      sid: "session-123",
+    })
+      .setProtectedHeader({ alg: "HS384" })
+      .setSubject("user-123")
+      .setIssuer(options.issuer)
+      .setAudience(options.audience)
+      .setIssuedAt(now)
+      .setExpirationTime(now + 60)
+      .sign(key);
+    const missingSubject = await new SignJWT({
+      tokenUse: "access",
+      sid: "session-123",
+    })
+      .setProtectedHeader({ alg: "HS256" })
+      .setIssuer(options.issuer)
+      .setAudience(options.audience)
+      .setIssuedAt(now)
+      .setExpirationTime(now + 60)
+      .sign(key);
+    const expired = await new SignJWT({
+      tokenUse: "access",
+      sid: "session-123",
+    })
+      .setProtectedHeader({ alg: "HS256" })
+      .setSubject("user-123")
+      .setIssuer(options.issuer)
+      .setAudience(options.audience)
+      .setIssuedAt(now - 60)
+      .setExpirationTime(now - 1)
+      .sign(key);
+
+    await expect(tokens.verifyAccessToken(unsupportedAlgorithm)).resolves
+      .toBeNull();
+    await expect(tokens.verifyAccessToken(missingSubject)).resolves.toBeNull();
+    await expect(tokens.verifyAccessToken(expired)).resolves.toBeNull();
   });
 
   it("should reject tokens with a different audience", async () => {

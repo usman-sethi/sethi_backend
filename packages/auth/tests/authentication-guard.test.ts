@@ -62,12 +62,21 @@ function createGuard() {
     createRefreshToken: vi.fn(() => "unused"),
     hashRefreshToken: vi.fn(() => "unused"),
   };
+  const securityEvents: Array<Record<string, unknown>> = [];
 
   return {
     users,
     sessions,
     tokens,
-    guard: createAuthenticationGuard({ users, sessions, tokens }),
+    securityEvents,
+    guard: createAuthenticationGuard({
+      users,
+      sessions,
+      tokens,
+      securityEventLogger: (event) => {
+        securityEvents.push(event);
+      },
+    }),
   };
 }
 
@@ -169,5 +178,12 @@ describe("Authentication guard", () => {
     });
     await expect(wrongOwner.guard.authenticate("Bearer valid")).rejects
       .toBeInstanceOf(UnauthorizedError);
+    expect(wrongOwner.securityEvents).toContainEqual(
+      expect.objectContaining({
+        type: "access.rejected",
+        reason: "session_mismatch",
+      }),
+    );
+    expect(JSON.stringify(wrongOwner.securityEvents)).not.toContain("valid");
   });
 });

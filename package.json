@@ -11,6 +11,7 @@
   "scripts": {
     "build": "pnpm --recursive --if-present build",
     "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.mts",
     "test:watch": "vitest",
     "clean": "pnpm --recursive --if-present clean"
   },

@@ -251,6 +251,24 @@ session lifetime is 30 days; MongoDB TTL cleanup is asynchronous.
 If registration succeeds in creating a user but session creation fails, that
 user record remains and can sign in later.
 
+Each successful refresh atomically swaps the current token hash and appends the
+consumed hash to its session document. Reuse of any consumed token is treated as
+replay and revokes that session; this strict policy also applies to simultaneous
+refresh attempts, so one attempt may receive a response whose access token is
+immediately invalidated by the competing replay. Consumed hashes remain only
+until the session expires and MongoDB TTL cleanup removes its document.
+Sessions are revoked at 100,000 rotations rather than allowing their retained
+history to grow without bound; the user must authenticate again. Rotation uses
+single-document atomic updates and does not require MongoDB transactions or a
+replica set. Session documents have a unique current-token index, a consumed
+hash lookup index, an expiry TTL index, and a user/revocation index.
+On the first startup after this replay-history change, legacy active sessions
+without consumed-token history are revoked; affected users must sign in again.
+
+Refresh, logout and logout-all security events are logged with event type and
+safe user/session identifiers only. The refresh route is limited to 10
+requests per minute per rate-limit key.
+
 Use the access token as a bearer token for `/auth/me` and `/auth/logout-all`.
 The logout-all endpoint also requires a CSRF token because browser clients may
 send the refresh cookie.
@@ -330,7 +348,28 @@ validation, password/token utilities, authentication routes, session behavior,
 and mocked MongoDB repository operations.
 
 The authentication repository tests use mocks; they do not claim a live
-MongoDB integration test.
+MongoDB integration test. The Fastify injection tests exercise the complete
+HTTP lifecycle with repository doubles.
+
+### Optional real MongoDB integration
+
+The opt-in suite performs real inserts, unique-index checks, refresh/replay
+operations, and concurrent rotations. It only permits a local MongoDB host and
+requires an explicitly named database ending in `_integration_test`. Each run
+uses a unique temporary database and drops only that database afterward. The
+suite is separate from `pnpm test`.
+
+PowerShell setup and invocation:
+
+```powershell
+$env:TEST_MONGODB_URI = "mongodb://127.0.0.1:27017"
+$env:TEST_MONGODB_DATABASE = "sethi_backend_integration_test"
+pnpm test:integration
+```
+
+The real MongoDB suite was not run as part of the default test suite. Configure
+a disposable local MongoDB instance before running it; do not point it at a
+production or shared database.
 
 ---
 

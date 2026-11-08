@@ -1,7 +1,9 @@
 import type {
+  AuthRefreshTokenLookup,
   AuthSessionRecord,
   AuthSessionRepository,
   CreateAuthSessionInput,
+  RotateAuthSessionResult,
 } from "@sethi-backend/auth";
 import {
   ObjectId,
@@ -13,11 +15,15 @@ interface AuthSessionDocument {
   _id: ObjectId;
   userId: ObjectId;
   refreshTokenHash: string;
+  consumedRefreshTokenHashes?: string[];
   createdAt: Date;
   updatedAt: Date;
   expiresAt: Date;
   revokedAt: Date | null;
+  rotationCount?: number;
 }
+
+export const MAX_AUTH_SESSION_REFRESH_ROTATIONS = 100_000;
 
 export interface MongoAuthSessionRepositoryOptions {
   getDatabase: () => Db;
@@ -43,6 +49,7 @@ function toAuthSessionRecord(
     updatedAt: document.updatedAt,
     expiresAt: document.expiresAt,
     revokedAt: document.revokedAt,
+    rotationCount: document.rotationCount ?? 0,
   };
 }
 
@@ -63,6 +70,10 @@ export function createMongoAuthSessionRepository(
           { unique: true, name: "auth_sessions_refresh_hash_unique" },
         ),
         collection().createIndex(
+          { consumedRefreshTokenHashes: 1 },
+          { name: "auth_sessions_consumed_hash" },
+        ),
+        collection().createIndex(
           { expiresAt: 1 },
           { expireAfterSeconds: 0, name: "auth_sessions_expiry_ttl" },
         ),
@@ -71,6 +82,22 @@ export function createMongoAuthSessionRepository(
           { name: "auth_sessions_user_active" },
         ),
       ]);
+
+      const migratedAt = new Date();
+      await collection().updateMany(
+        {
+          consumedRefreshTokenHashes: { $exists: false },
+          revokedAt: null,
+        },
+        {
+          $set: {
+            consumedRefreshTokenHashes: [],
+            rotationCount: 0,
+            revokedAt: migratedAt,
+            updatedAt: migratedAt,
+          },
+        },
+      );
     },
 
     async create(input: CreateAuthSessionInput): Promise<AuthSessionRecord> {
@@ -78,10 +105,12 @@ export function createMongoAuthSessionRepository(
         _id: new ObjectId(),
         userId: toObjectId(input.userId, "User ID"),
         refreshTokenHash: input.refreshTokenHash,
+        consumedRefreshTokenHashes: [],
         createdAt: input.createdAt,
         updatedAt: input.updatedAt,
         expiresAt: input.expiresAt,
         revokedAt: null,
+        rotationCount: 0,
       };
 
       await collection().insertOne(document);
@@ -101,34 +130,113 @@ export function createMongoAuthSessionRepository(
 
     async findByRefreshTokenHash(
       hash: string,
-    ): Promise<AuthSessionRecord | null> {
-      const document = await collection().findOne({
+    ): Promise<AuthRefreshTokenLookup | null> {
+      const current = await collection().findOne({
         refreshTokenHash: hash,
       });
-      return document ? toAuthSessionRecord(document) : null;
+      if (current) {
+        return {
+          session: toAuthSessionRecord(current),
+          status: "current",
+        };
+      }
+
+      const consumed = await collection().findOne({
+        consumedRefreshTokenHashes: hash,
+      });
+      return consumed
+        ? {
+          session: toAuthSessionRecord(consumed),
+          status: "consumed",
+        }
+        : null;
     },
 
-    async rotateRefreshToken(input): Promise<AuthSessionRecord | null> {
+    async rotateRefreshToken(input): Promise<RotateAuthSessionResult> {
       const id = toObjectId(input.id, "Session ID");
       const userId = toObjectId(input.userId, "User ID");
-      const document = await collection().findOneAndUpdate(
+      const sessionCollection = collection();
+      const document = await sessionCollection.findOneAndUpdate(
         {
           _id: id,
           userId,
           refreshTokenHash: input.currentRefreshTokenHash,
           revokedAt: null,
           expiresAt: { $gt: input.updatedAt },
+          $or: [
+            { rotationCount: { $lt: MAX_AUTH_SESSION_REFRESH_ROTATIONS } },
+            { rotationCount: { $exists: false } },
+          ],
         },
         {
           $set: {
             refreshTokenHash: input.newRefreshTokenHash,
             updatedAt: input.updatedAt,
           },
+          $addToSet: {
+            consumedRefreshTokenHashes: input.currentRefreshTokenHash,
+          },
+          $inc: {
+            rotationCount: 1,
+          },
         },
         { returnDocument: "after" },
       );
 
-      return document ? toAuthSessionRecord(document) : null;
+      if (document) {
+        return {
+          status: "rotated",
+          session: toAuthSessionRecord(document),
+        };
+      }
+
+      const replayedSession = await sessionCollection.findOneAndUpdate(
+        {
+          _id: id,
+          userId,
+          consumedRefreshTokenHashes: input.currentRefreshTokenHash,
+          revokedAt: null,
+          expiresAt: { $gt: input.updatedAt },
+        },
+        {
+          $set: {
+            revokedAt: input.updatedAt,
+            updatedAt: input.updatedAt,
+          },
+        },
+        { returnDocument: "after" },
+      );
+
+      if (replayedSession) {
+        return {
+          status: "replayed",
+          session: toAuthSessionRecord(replayedSession),
+        };
+      }
+
+      const exhaustedSession = await sessionCollection.findOneAndUpdate(
+        {
+          _id: id,
+          userId,
+          refreshTokenHash: input.currentRefreshTokenHash,
+          revokedAt: null,
+          expiresAt: { $gt: input.updatedAt },
+          rotationCount: { $gte: MAX_AUTH_SESSION_REFRESH_ROTATIONS },
+        },
+        {
+          $set: {
+            revokedAt: input.updatedAt,
+            updatedAt: input.updatedAt,
+          },
+        },
+        { returnDocument: "after" },
+      );
+      return exhaustedSession
+        ? {
+          status: "rotation_limit",
+          session: toAuthSessionRecord(exhaustedSession),
+        }
+        : { status: "invalid" };
     },
 
     async revokeById(
@@ -156,7 +264,13 @@ export function createMongoAuthSessionRepository(
       revokedAt: Date,
     ): Promise<boolean> {
       const result = await collection().updateOne(
-        { refreshTokenHash: hash, revokedAt: null },
+        {
+          $or: [
+            { refreshTokenHash: hash },
+            { consumedRefreshTokenHashes: hash },
+          ],
+          revokedAt: null,
+        },
         { $set: { revokedAt, updatedAt: revokedAt } },
       );
       return result.modifiedCount === 1;

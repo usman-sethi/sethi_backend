@@ -62,9 +62,18 @@ function sendAuthError(
   }
 
   if (error instanceof AuthRepositoryError) {
-    server.log.error({ err: error }, "Authentication storage operation failed");
+    server.log.error(
+      { event: "auth.request.failed", errorName: error.name },
+      "Authentication storage operation failed",
+    );
   } else {
-    server.log.error({ err: error }, "Authentication request failed");
+    server.log.error(
+      {
+        event: "auth.request.failed",
+        errorName: error instanceof Error ? error.name : "UnknownError",
+      },
+      "Authentication request failed",
+    );
   }
 
   return reply.code(500).send({
@@ -152,7 +161,15 @@ export function registerAuthRoutes(
 
   server.post(
     "/auth/refresh",
-    { onRequest: options.csrfProtection },
+    {
+      onRequest: options.csrfProtection,
+      config: {
+        rateLimit: {
+          max: 10,
+          timeWindow: "1 minute",
+        },
+      },
+    },
     async (request, reply) => {
       try {
         const result = await options.service.refresh(

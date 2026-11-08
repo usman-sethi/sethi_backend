@@ -7,6 +7,8 @@ import {
   UnauthorizedError,
 } from "./errors.js";
 import type {
+  AuthSecurityEvent,
+  AuthSecurityEventLogger,
   AuthSessionRepository,
   AuthenticationGuard,
   AuthUserRepository,
@@ -23,11 +25,16 @@ export interface CreateAuthenticationGuardOptions {
   users: AuthUserRepository;
   sessions: AuthSessionRepository;
   tokens: TokenService;
+  securityEventLogger?: AuthSecurityEventLogger;
 }
 
 export function createAuthenticationGuard(
   options: CreateAuthenticationGuardOptions,
 ): AuthenticationGuard {
+  const reportSecurityEvent = (
+    event: AuthSecurityEvent,
+  ): void => options.securityEventLogger?.(event);
+
   return {
     async authenticate(
       authorizationHeader: string | undefined,
@@ -35,15 +42,28 @@ export function createAuthenticationGuard(
       const match = authorizationHeader?.match(/^Bearer ([^\s]+)$/i);
       const token = match?.[1];
       if (!token) {
+        reportSecurityEvent({
+          type: "access.rejected",
+          reason: "invalid",
+        });
         throw new UnauthorizedError();
       }
 
       const verifiedToken = await options.tokens.verifyAccessToken(token);
       if (!verifiedToken) {
+        reportSecurityEvent({
+          type: "access.rejected",
+          reason: "invalid",
+        });
         throw new UnauthorizedError("Access token is invalid or expired.");
       }
 
       if (!verifiedToken.sessionId) {
+        reportSecurityEvent({
+          type: "access.rejected",
+          reason: "session_missing",
+          userId: verifiedToken.subject,
+        });
         throw new UnauthorizedError("Access token is invalid or expired.");
       }
 
@@ -55,11 +75,44 @@ export function createAuthenticationGuard(
       }
 
       if (
-        !session ||
-        session.userId !== verifiedToken.subject ||
-        session.revokedAt !== null ||
-        session.expiresAt.getTime() <= Date.now()
+        !session
       ) {
+        reportSecurityEvent({
+          type: "access.rejected",
+          reason: "session_missing",
+          userId: verifiedToken.subject,
+          sessionId: verifiedToken.sessionId,
+        });
+        throw new UnauthorizedError("Access token is invalid or expired.");
+      }
+
+      if (session.userId !== verifiedToken.subject) {
+        reportSecurityEvent({
+          type: "access.rejected",
+          reason: "session_mismatch",
+          userId: verifiedToken.subject,
+          sessionId: session.id,
+        });
+        throw new UnauthorizedError("Access token is invalid or expired.");
+      }
+
+      if (session.revokedAt !== null) {
+        reportSecurityEvent({
+          type: "access.rejected",
+          reason: "session_revoked",
+          userId: verifiedToken.subject,
+          sessionId: session.id,
+        });
+        throw new UnauthorizedError("Access token is invalid or expired.");
+      }
+
+      if (session.expiresAt.getTime() <= Date.now()) {
+        reportSecurityEvent({
+          type: "access.rejected",
+          reason: "session_expired",
+          userId: verifiedToken.subject,
+          sessionId: session.id,
+        });
         throw new UnauthorizedError("Access token is invalid or expired.");
       }
 
@@ -71,6 +124,12 @@ export function createAuthenticationGuard(
       }
 
       if (!user) {
+        reportSecurityEvent({
+          type: "access.rejected",
+          reason: "user_missing",
+          userId: verifiedToken.subject,
+          sessionId: session.id,
+        });
         throw new UnauthorizedError("Access token is invalid or expired.");
       }
 

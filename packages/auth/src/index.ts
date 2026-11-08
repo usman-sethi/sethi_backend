@@ -25,6 +25,9 @@ export type {
 } from "./schemas.js";
 export type {
   AuthService,
+  AuthRefreshTokenLookup,
+  AuthSecurityEvent,
+  AuthSecurityEventLogger,
   AuthSessionRecord,
   AuthSessionRepository,
   AuthUserRecord,
@@ -34,5 +37,6 @@ export type {
   CreateAuthUserInput,
   PublicAuthUser,
   CreateAuthSessionInput,
+  RotateAuthSessionResult,
   RotateAuthSessionInput,
 } from "./types.js";

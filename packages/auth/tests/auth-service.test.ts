@@ -9,13 +9,19 @@ import {
 import {
   createAuthService,
   AuthValidationError,
+  AuthRepositoryError,
   DuplicateUserError,
   InvalidRefreshTokenError,
   InvalidCredentialsError,
   type AuthUserRecord,
+  type AuthSessionRecord,
   type AuthUserRepository,
   type CreateAuthUserInput,
 } from "../src/index.js";
+
+type MockSessionRecord = AuthSessionRecord & {
+  consumedRefreshTokenHashes: string[];
+};
 
 function createHarness() {
   const usersByEmail = new Map<string, AuthUserRecord>();
@@ -34,15 +40,7 @@ function createHarness() {
     createRefreshToken: vi.fn(() => "refresh-token"),
     hashRefreshToken: vi.fn((token: string) => `hash:${token}`),
   };
-  const sessionsById = new Map<string, {
-    id: string;
-    userId: string;
-    refreshTokenHash: string;
-    createdAt: Date;
-    updatedAt: Date;
-    expiresAt: Date;
-    revokedAt: Date | null;
-  }>();
+  const sessionsById = new Map<string, MockSessionRecord>();
   const sessions = {
     ensureIndexes: vi.fn(async () => undefined),
     create: vi.fn(async (input: {
@@ -55,17 +53,28 @@ function createHarness() {
       const session = {
         id: "session-1",
         ...input,
+        consumedRefreshTokenHashes: [],
         revokedAt: null,
       };
       sessionsById.set(session.id, session);
       return session;
     }),
     findById: vi.fn(async (id: string) => sessionsById.get(id) ?? null),
-    findByRefreshTokenHash: vi.fn(async (hash: string) =>
-      [...sessionsById.values()].find((session) =>
+    findByRefreshTokenHash: vi.fn(async (hash: string) => {
+      const current = [...sessionsById.values()].find((session) =>
         session.refreshTokenHash === hash
-      ) ?? null,
-    ),
+      );
+      if (current) {
+        return { session: current, status: "current" as const };
+      }
+
+      const consumed = [...sessionsById.values()].find((session) =>
+        session.consumedRefreshTokenHashes.includes(hash)
+      );
+      return consumed
+        ? { session: consumed, status: "consumed" as const }
+        : null;
+    }),
     rotateRefreshToken: vi.fn(async (input: {
       id: string;
       currentRefreshTokenHash: string;
@@ -73,24 +82,54 @@ function createHarness() {
       updatedAt: Date;
     }) => {
       const session = sessionsById.get(input.id);
-      if (!session || session.refreshTokenHash !== input.currentRefreshTokenHash) {
-        return null;
+      if (!session || session.revokedAt || session.expiresAt <= input.updatedAt) {
+        return { status: "invalid" as const };
       }
 
+      if (session.refreshTokenHash !== input.currentRefreshTokenHash) {
+        if (
+          session.consumedRefreshTokenHashes.includes(
+            input.currentRefreshTokenHash,
+          )
+        ) {
+          session.revokedAt = input.updatedAt;
+          session.updatedAt = input.updatedAt;
+          return { status: "replayed" as const, session };
+        }
+        return { status: "invalid" as const };
+      }
+
+      session.consumedRefreshTokenHashes.push(input.currentRefreshTokenHash);
       session.refreshTokenHash = input.newRefreshTokenHash;
       session.updatedAt = input.updatedAt;
-      return session;
+      return { status: "rotated" as const, session };
     }),
-    revokeById: vi.fn(async (id: string, _userId: string, revokedAt: Date) => {
+    revokeById: vi.fn(async (id: string, userId: string, revokedAt: Date) => {
       const session = sessionsById.get(id);
-      if (!session) {
+      if (!session || session.userId !== userId || session.revokedAt) {
         return false;
       }
       session.revokedAt = revokedAt;
       return true;
     }),
-    revokeByRefreshTokenHash: vi.fn(async () => true),
-    revokeAllForUser: vi.fn(async () => undefined),
+    revokeByRefreshTokenHash: vi.fn(async (hash: string, revokedAt: Date) => {
+      const session = [...sessionsById.values()].find((record) =>
+        record.refreshTokenHash === hash ||
+        record.consumedRefreshTokenHashes.includes(hash)
+      );
+      if (!session || session.revokedAt) {
+        return false;
+      }
+      session.revokedAt = revokedAt;
+      return true;
+    }),
+    revokeAllForUser: vi.fn(async (userId: string, revokedAt: Date) => {
+      for (const session of sessionsById.values()) {
+        if (session.userId === userId && !session.revokedAt) {
+          session.revokedAt = revokedAt;
+        }
+      }
+    }),
   };
   const users: AuthUserRepository = {
     ensureIndexes: vi.fn(async () => undefined),
@@ -118,12 +157,19 @@ function createHarness() {
     passwordHasher,
     tokens,
     sessions,
-    createService: () =>
+    sessionsById,
+    createService: (securityEventLogger?: (event: {
+      type: string;
+      userId?: string;
+      sessionId?: string;
+      reason?: string;
+    }) => void) =>
       createAuthService({
         users,
         sessions,
         passwordHasher,
         tokens,
+        securityEventLogger,
       }),
   };
 }
@@ -279,8 +325,11 @@ describe("Authentication service", () => {
     expect(result.refreshToken).toBe("refresh-token");
   });
 
-  it("rotates refresh tokens and rejects replay of the old token", async () => {
-    const service = await harness.createService();
+  it("rotates refresh tokens and revokes the session when an old token is replayed", async () => {
+    const securityEvents: Array<{ type: string; sessionId?: string }> = [];
+    const service = await harness.createService((event) => {
+      securityEvents.push(event);
+    });
     await service.register({
       email: "user@example.com",
       password: "a secure passphrase 123",
@@ -300,5 +349,133 @@ describe("Authentication service", () => {
     await expect(service.refresh("refresh-token")).rejects.toBeInstanceOf(
       InvalidRefreshTokenError,
     );
+    expect(harness.sessionsById.get("session-1")?.revokedAt)
+      .toBeInstanceOf(Date);
+    expect(securityEvents).toContainEqual(expect.objectContaining({
+      type: "refresh.replay_detected",
+      sessionId: "session-1",
+    }));
+  });
+
+  it("detects replay after multiple rotations and records no token material", async () => {
+    const securityEvents: Array<Record<string, unknown>> = [];
+    const service = await harness.createService((event) => {
+      securityEvents.push(event);
+    });
+    await service.register({
+      email: "user@example.com",
+      password: "a secure passphrase 123",
+    });
+    harness.tokens.createRefreshToken
+      .mockReturnValueOnce("refresh-B")
+      .mockReturnValueOnce("refresh-C");
+
+    await service.refresh("refresh-token");
+    await service.refresh("refresh-B");
+    await expect(service.refresh("refresh-token")).rejects
+      .toBeInstanceOf(InvalidRefreshTokenError);
+
+    expect(harness.sessionsById.get("session-1")).toMatchObject({
+      refreshTokenHash: "hash:refresh-C",
+      revokedAt: expect.any(Date),
+    });
+    expect(JSON.stringify(securityEvents)).not.toContain("refresh-token");
+    expect(JSON.stringify(securityEvents)).not.toContain("hash:");
+  });
+
+  it("allows only one concurrent rotation and revokes the family on reuse", async () => {
+    const service = await harness.createService();
+    await service.register({
+      email: "user@example.com",
+      password: "a secure passphrase 123",
+    });
+    harness.tokens.createRefreshToken
+      .mockReturnValueOnce("refresh-B")
+      .mockReturnValueOnce("refresh-C");
+
+    const results = await Promise.allSettled([
+      service.refresh("refresh-token"),
+      service.refresh("refresh-token"),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect(harness.sessionsById.get("session-1")?.revokedAt)
+      .toBeInstanceOf(Date);
+  });
+
+  it("fails closed when atomic rotation reports a database failure", async () => {
+    const service = await harness.createService();
+    await service.register({
+      email: "user@example.com",
+      password: "a secure passphrase 123",
+    });
+    harness.sessions.rotateRefreshToken.mockRejectedValue(
+      new Error("database write failed"),
+    );
+
+    await expect(service.refresh("refresh-token")).rejects.toBeInstanceOf(
+      AuthRepositoryError,
+    );
+    expect(harness.sessionsById.get("session-1")?.refreshTokenHash)
+      .toBe("hash:refresh-token");
+  });
+
+  it("rejects expired sessions before attempting a token rotation", async () => {
+    const service = await harness.createService();
+    await service.register({
+      email: "user@example.com",
+      password: "a secure passphrase 123",
+    });
+    const session = harness.sessionsById.get("session-1")!;
+    session.expiresAt = new Date(Date.now() - 1);
+
+    await expect(service.refresh("refresh-token")).rejects.toBeInstanceOf(
+      InvalidRefreshTokenError,
+    );
+    expect(harness.sessions.rotateRefreshToken).not.toHaveBeenCalled();
+  });
+
+  it("revokes a session at the refresh-history cap and reports a sanitized event", async () => {
+    const securityEvents: Array<Record<string, unknown>> = [];
+    const service = await harness.createService((event) => {
+      securityEvents.push(event);
+    });
+    await service.register({
+      email: "user@example.com",
+      password: "a secure passphrase 123",
+    });
+    const session = harness.sessionsById.get("session-1")!;
+    harness.sessions.rotateRefreshToken.mockResolvedValueOnce({
+      status: "rotation_limit",
+      session: {
+        ...session,
+        revokedAt: new Date(),
+      },
+    });
+
+    await expect(service.refresh("refresh-token")).rejects.toBeInstanceOf(
+      InvalidRefreshTokenError,
+    );
+    expect(securityEvents).toContainEqual(expect.objectContaining({
+      type: "refresh.rejected",
+      reason: "rotation_limit",
+      sessionId: "session-1",
+    }));
+    expect(JSON.stringify(securityEvents)).not.toContain("refresh-token");
+  });
+
+  it("revokes a newly-created session when access-token signing fails", async () => {
+    const service = await harness.createService();
+    harness.tokens.createAccessToken.mockRejectedValueOnce(
+      new Error("signing failed"),
+    );
+
+    await expect(service.register({
+      email: "user@example.com",
+      password: "a secure passphrase 123",
+    })).rejects.toThrow("signing failed");
+    expect(harness.sessionsById.get("session-1")?.revokedAt)
+      .toBeInstanceOf(Date);
   });
 });

@@ -24,6 +24,8 @@ import type {
   AuthSessionRepository,
   AuthUserRepository,
   AuthenticationResult,
+  AuthSecurityEvent,
+  AuthSecurityEventLogger,
   AuthUserRecord,
   PublicAuthUser,
 } from "./types.js";
@@ -34,6 +36,7 @@ export interface CreateAuthServiceOptions {
   passwordHasher?: PasswordHasher;
   tokens: TokenService;
   sessionTtlSeconds?: number;
+  securityEventLogger?: AuthSecurityEventLogger;
 }
 
 export const DEFAULT_AUTH_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
@@ -75,6 +78,9 @@ export async function createAuthService(
   const dummyPasswordHash = await passwordHasher.hash(
     randomBytes(32).toString("base64url"),
   );
+  const reportSecurityEvent = (
+    event: AuthSecurityEvent,
+  ): void => options.securityEventLogger?.(event);
 
   async function createAuthenticationResult(
     user: AuthUserRecord,
@@ -102,7 +108,14 @@ export async function createAuthService(
       );
     } catch (error) {
       try {
-        await options.sessions.revokeById(session.id, user.id, new Date());
+        const revoked = await options.sessions.revokeById(
+          session.id,
+          user.id,
+          new Date(),
+        );
+        if (!revoked) {
+          throw new Error("The new authentication session was not revoked.");
+        }
       } catch (revokeError) {
         throw new AuthRepositoryError(
           "Unable to finalize authentication and revoke its session.",
@@ -181,25 +194,69 @@ export async function createAuthService(
 
   async function refresh(refreshToken: string): Promise<AuthenticationResult> {
     if (typeof refreshToken !== "string" || refreshToken.length === 0) {
+      reportSecurityEvent({
+        type: "refresh.rejected",
+        reason: "invalid",
+      });
       throw new InvalidRefreshTokenError();
     }
 
     const currentRefreshTokenHash = options.tokens.hashRefreshToken(refreshToken);
-    let session: AuthSessionRecord | null;
+    let tokenLookup;
     try {
-      session = await options.sessions.findByRefreshTokenHash(
+      tokenLookup = await options.sessions.findByRefreshTokenHash(
         currentRefreshTokenHash,
       );
     } catch (error) {
       throw new AuthRepositoryError(undefined, { cause: error });
     }
 
+    if (!tokenLookup) {
+      reportSecurityEvent({
+        type: "refresh.rejected",
+        reason: "invalid",
+      });
+      throw new InvalidRefreshTokenError();
+    }
+
+    const { session } = tokenLookup;
     const now = new Date();
-    if (
-      !session ||
-      session.revokedAt !== null ||
-      session.expiresAt.getTime() <= now.getTime()
-    ) {
+    if (session.revokedAt !== null) {
+      reportSecurityEvent({
+        type: "refresh.rejected",
+        reason: "revoked",
+        userId: session.userId,
+        sessionId: session.id,
+      });
+      throw new InvalidRefreshTokenError();
+    }
+
+    if (session.expiresAt.getTime() <= now.getTime()) {
+      reportSecurityEvent({
+        type: "refresh.rejected",
+        reason: "expired",
+        userId: session.userId,
+        sessionId: session.id,
+      });
+      throw new InvalidRefreshTokenError();
+    }
+
+    if (tokenLookup.status === "consumed") {
+      try {
+        await options.sessions.revokeById(
+          session.id,
+          session.userId,
+          now,
+        );
+      } catch (error) {
+        throw new AuthRepositoryError(undefined, { cause: error });
+      }
+
+      reportSecurityEvent({
+        type: "refresh.replay_detected",
+        userId: session.userId,
+        sessionId: session.id,
+      });
       throw new InvalidRefreshTokenError();
     }
 
@@ -210,6 +267,17 @@ export async function createAuthService(
       throw new AuthRepositoryError(undefined, { cause: error });
     }
     if (!user) {
+      try {
+        await options.sessions.revokeById(session.id, session.userId, now);
+      } catch (error) {
+        throw new AuthRepositoryError(undefined, { cause: error });
+      }
+      reportSecurityEvent({
+        type: "refresh.rejected",
+        reason: "invalid",
+        userId: session.userId,
+        sessionId: session.id,
+      });
       throw new InvalidRefreshTokenError();
     }
 
@@ -218,9 +286,9 @@ export async function createAuthService(
       user.id,
       session.id,
     );
-    let rotatedSession: AuthSessionRecord | null;
+    let rotation;
     try {
-      rotatedSession = await options.sessions.rotateRefreshToken({
+      rotation = await options.sessions.rotateRefreshToken({
         id: session.id,
         userId: user.id,
         currentRefreshTokenHash,
@@ -231,14 +299,49 @@ export async function createAuthService(
       throw new AuthRepositoryError(undefined, { cause: error });
     }
 
-    if (!rotatedSession) {
+    if (rotation.status === "replayed") {
+      reportSecurityEvent({
+        type: "refresh.replay_detected",
+        userId: rotation.session.userId,
+        sessionId: rotation.session.id,
+      });
       throw new InvalidRefreshTokenError();
     }
+
+    if (rotation.status === "rotation_limit") {
+      reportSecurityEvent({
+        type: "session.revoked",
+        sessionId: rotation.session.id,
+      });
+      reportSecurityEvent({
+        type: "refresh.rejected",
+        reason: "rotation_limit",
+        userId: rotation.session.userId,
+        sessionId: rotation.session.id,
+      });
+      throw new InvalidRefreshTokenError();
+    }
+
+    if (rotation.status === "invalid") {
+      reportSecurityEvent({
+        type: "refresh.rejected",
+        reason: "invalid",
+        userId: session.userId,
+        sessionId: session.id,
+      });
+      throw new InvalidRefreshTokenError();
+    }
+
+    reportSecurityEvent({
+      type: "refresh.succeeded",
+      userId: user.id,
+      sessionId: session.id,
+    });
 
     return {
       accessToken,
       refreshToken: nextRefreshToken,
-      refreshTokenExpiresAt: rotatedSession.expiresAt,
+      refreshTokenExpiresAt: rotation.session.expiresAt,
       user: toPublicUser(user),
     };
   }
@@ -249,10 +352,18 @@ export async function createAuthService(
     }
 
     try {
-      await options.sessions.revokeByRefreshTokenHash(
-        options.tokens.hashRefreshToken(refreshToken),
+      const tokenHash = options.tokens.hashRefreshToken(refreshToken);
+      const tokenLookup = await options.sessions.findByRefreshTokenHash(tokenHash);
+      const revoked = await options.sessions.revokeByRefreshTokenHash(
+        tokenHash,
         new Date(),
       );
+      if (revoked && tokenLookup) {
+        reportSecurityEvent({
+          type: "session.revoked",
+          sessionId: tokenLookup.session.id,
+        });
+      }
     } catch (error) {
       throw new AuthRepositoryError(undefined, { cause: error });
     }
@@ -261,6 +372,10 @@ export async function createAuthService(
   async function logoutAll(userId: string): Promise<void> {
     try {
       await options.sessions.revokeAllForUser(userId, new Date());
+      reportSecurityEvent({
+        type: "sessions.revoked_all",
+        userId,
+      });
     } catch (error) {
       throw new AuthRepositoryError(undefined, { cause: error });
     }

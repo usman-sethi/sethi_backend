@@ -206,6 +206,7 @@ export function createFastifyAdapter(
 
 export {
   createCsrfProtectionHook,
+  createRedisRateLimitClient,
   generateCsrfToken,
   getHttpCookieOptions,
   normalizeAllowedOrigins,
@@ -215,4 +216,5 @@ export {
 export type {
   HttpSecurityEnvironment,
   HttpSecurityOptions,
+  RedisRateLimitClientOptions,
 } from "./http-security.js";

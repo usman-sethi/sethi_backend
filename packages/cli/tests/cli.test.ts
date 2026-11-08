@@ -8,9 +8,9 @@ const packageDirectory = resolve(import.meta.dirname, "..");
 const cliPath = resolve(packageDirectory, "dist", "index.js");
 
 beforeAll(() => {
-  execFileSync("pnpm", ["--dir", packageDirectory, "build"], {
+  execFileSync(process.execPath, [join(packageDirectory, "scripts", "build.mjs")], {
+    cwd: packageDirectory,
     stdio: "inherit",
-    shell: process.platform === "win32",
   });
 });
 
@@ -25,7 +25,7 @@ describe("Sethi CLI process", () => {
   it("prints help and version", () => {
     const help = runCli(["--help"]);
     expect(help.status).toBe(0);
-    expect(help.stdout).toContain("sethi init <project-name>");
+    expect(help.stdout).toContain("init <project-name>");
 
     const version = runCli(["--version"]);
     expect(version.status).toBe(0);

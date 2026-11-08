@@ -11,6 +11,7 @@ import {
 import {
   createFastifyAdapter,
   createCsrfProtectionHook,
+  createRedisRateLimitClient,
   generateCsrfToken,
   registerHttpSecurity,
 } from "@sethi-backend/adapter-fastify";
@@ -65,6 +66,14 @@ async function main(): Promise<void> {
   registerHttpSecurity(http.instance, {
     allowedOrigins: config.httpSecurity.corsOrigins,
     environment: config.environment,
+    rateLimit: config.httpSecurity.rateLimitStore === "redis"
+      ? {
+        store: "redis",
+        redis: createRedisRateLimitClient({
+          url: config.httpSecurity.redisUrl ?? "",
+        }),
+      }
+      : { store: "memory" },
   });
 
   const securityEventLogger = (event: AuthSecurityEvent): void => {

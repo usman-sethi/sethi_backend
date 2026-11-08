@@ -77,7 +77,7 @@ const projectTemplate = (name: string, versions: ReleaseVersions) => {
 import { z } from "zod";
 import { createAuthService, createAuthenticationGuard } from "@sethi-backend/auth";
 import { loadConfig } from "@sethi-backend/config";
-import { createCsrfProtectionHook, createFastifyAdapter, generateCsrfToken, registerHttpSecurity } from "@sethi-backend/adapter-fastify";
+import { createCsrfProtectionHook, createFastifyAdapter, createRedisRateLimitClient, generateCsrfToken, registerHttpSecurity } from "@sethi-backend/adapter-fastify";
 import { createMongoAuthActionTokenRepository, createMongoAuthSessionRepository, createMongoAuthUserRepository, createMongoDatabaseAdapter } from "@sethi-backend/database-mongodb";
 import { createSmtpEmailSender } from "@sethi-backend/email";
 import { createBackend } from "@sethi-backend/core";
@@ -105,6 +105,17 @@ if (Boolean(config.SMTP_HOST) !== Boolean(config.EMAIL_FROM)) {
 }
 if (Boolean(config.SMTP_USER) !== Boolean(config.SMTP_PASSWORD)) {
   throw new Error("SMTP_USER and SMTP_PASSWORD must be configured together.");
+}
+const useRedis = process.env.RATE_LIMIT_STORE === "redis";
+if (config.NODE_ENV === "production" && !useRedis) {
+  throw new Error("Production requires RATE_LIMIT_STORE=redis.");
+}
+if (useRedis && !process.env.REDIS_URL) {
+  throw new Error("REDIS_URL is required when RATE_LIMIT_STORE=redis.");
+}
+if (config.NODE_ENV === "production" &&
+    !process.env.REDIS_URL?.startsWith("rediss://")) {
+  throw new Error("Production REDIS_URL must use TLS (rediss://).");
 }
 
 const database = createMongoDatabaseAdapter({
@@ -143,6 +154,12 @@ const http = createFastifyAdapter({ logger: config.NODE_ENV !== "test" });
 registerHttpSecurity(http.instance, {
   allowedOrigins: config.CORS_ORIGINS.split(",").map((origin) => origin.trim()),
   environment: config.NODE_ENV,
+  rateLimit: useRedis
+    ? {
+      store: "redis",
+      redis: createRedisRateLimitClient({ url: process.env.REDIS_URL ?? "" }),
+    }
+    : { store: "memory" },
 });
 
 const auth = await createAuthService({
@@ -225,7 +242,6 @@ try {
   await application.start();
   http.instance.log.info({ host: config.HOST, port: config.PORT }, "API listening");
 } catch (error) {
-  await database.disconnect().catch(() => undefined);
   console.error("Application startup failed.", {
     errorName: error instanceof Error ? error.name : "UnknownError",
   });
@@ -267,10 +283,13 @@ try {
     [".env.example", `NODE_ENV=development
 HOST=127.0.0.1
 PORT=3000
+RATE_LIMIT_STORE=memory
+REDIS_URL=
 MONGODB_URI=mongodb://127.0.0.1:27017
 MONGODB_DATABASE=${name.replaceAll("-", "_")}_dev
 JWT_SECRET=
 CORS_ORIGINS=http://localhost:5173
+RATE_LIMIT_STORE=memory
 APP_BASE_URL=http://localhost:5173
 SMTP_HOST=
 SMTP_PORT=587
@@ -439,8 +458,10 @@ function parseInitOptions(args: string[]) {
     template: "fastify-mongodb",
     packageManager: undefined as PackageManager | undefined,
   };
+  let positionalCount = 0;
   for (let index = 0; index < args.length; index += 1) {
     const option = args[index];
+    if (option === undefined) continue;
     if (option === "--template" || option === "--package-manager") {
       const value = args[index + 1];
       if (!value || value.startsWith("--")) {
@@ -453,7 +474,23 @@ function parseInitOptions(args: string[]) {
         throw new Error("--package-manager must be npm, pnpm, or yarn.");
       }
       index += 1;
+    } else if (
+      option !== "--yes" &&
+      option !== "--force" &&
+      option !== "--skip-install" &&
+      !option.startsWith("-")
+    ) {
+      positionalCount += 1;
+    } else if (
+      option !== "--yes" &&
+      option !== "--force" &&
+      option !== "--skip-install"
+    ) {
+      throw new Error(`Unknown init option: ${option}`);
     }
+  }
+  if (positionalCount !== 1) {
+    throw new Error("Usage: sethi init <project-name> [options].");
   }
   if (options.template !== "fastify-mongodb") {
     throw new Error("Only the fastify-mongodb template is currently supported.");
@@ -524,17 +561,28 @@ CORS_ORIGINS=http://localhost:5173
 APP_BASE_URL=http://localhost:5173
 `;
   files.set(".env", envFile);
-  mkdirSync(targetDirectory, { recursive: true });
-  for (const [path, content] of files) {
-    const outputPath = resolve(targetDirectory, path);
+const existingOutput = [...files.keys()].find((path) =>
+  existsSync(resolve(targetDirectory, path))
+);
+if (existingOutput) {
+  console.error(`Refusing to overwrite existing file: ${existingOutput}`);
+  return 2;
+}
+mkdirSync(targetDirectory, { recursive: true });
+for (const [path, content] of files) {
+  const outputPath = resolve(targetDirectory, path);
     if (!outputPath.startsWith(`${targetDirectory}${process.platform === "win32" ? "\\" : "/"}`)) {
       throw new Error("Generated file path escaped the project directory.");
     }
-    mkdirSync(dirname(outputPath), { recursive: true });
-    if (existsSync(outputPath)) {
-      console.error(`Refusing to overwrite existing file: ${path}`);
-      return 2;
+    let parent = targetDirectory;
+    for (const segment of dirname(path).split(/[\\/]/).filter(Boolean)) {
+      parent = join(parent, segment);
+      if (existsSync(parent) && lstatSync(parent).isSymbolicLink()) {
+        console.error(`Refusing to write through symbolic link: ${segment}`);
+        return 2;
+      }
     }
+    mkdirSync(dirname(outputPath), { recursive: true });
     writeFileSync(outputPath, content, { flag: "wx" });
   }
 

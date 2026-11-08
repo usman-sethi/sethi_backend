@@ -60,6 +60,19 @@ const optionalUrlSchema = optionalEnvironmentString.refine((value) => {
   }
 }, "APP_BASE_URL must be an HTTP(S) URL without credentials, query, or fragment.");
 
+const optionalRedisUrlSchema = optionalEnvironmentString.refine((value) => {
+  if (!value) return true;
+  try {
+    const url = new URL(value);
+    return ["redis:", "rediss:"].includes(url.protocol) &&
+      url.hostname.length > 0 &&
+      !url.search &&
+      !url.hash;
+  } catch {
+    return false;
+  }
+}, "REDIS_URL must be a redis:// or rediss:// URL.");
+
 function isHttpsUrl(value: string): boolean {
   try {
     return new URL(value).protocol === "https:";
@@ -121,6 +134,8 @@ const environmentSchema = z.object({
         .map((origin) => origin.trim())
         .filter(Boolean),
     ),
+  RATE_LIMIT_STORE: z.enum(["memory", "redis"]).default("memory"),
+  REDIS_URL: optionalRedisUrlSchema,
 
   SMTP_HOST: optionalEnvironmentString,
   SMTP_PORT: z.preprocess(
@@ -163,6 +178,13 @@ const environmentSchema = z.object({
       code: "custom",
       path: ["APP_BASE_URL"],
       message: "APP_BASE_URL must use HTTPS in production.",
+    });
+  }
+  if (env.RATE_LIMIT_STORE === "redis" && !env.REDIS_URL) {
+    context.addIssue({
+      code: "custom",
+      path: ["REDIS_URL"],
+      message: "REDIS_URL is required when RATE_LIMIT_STORE=redis.",
     });
   }
   if (
@@ -246,6 +268,18 @@ export function loadAppConfig(
       "CORS_ORIGINS contains an invalid origin for this environment.",
     );
   }
+  if (env.NODE_ENV === "production") {
+    if (env.RATE_LIMIT_STORE !== "redis" || !env.REDIS_URL) {
+      throw new ConfigValidationError(
+        "Production requires RATE_LIMIT_STORE=redis and REDIS_URL.",
+      );
+    }
+    if (new URL(env.REDIS_URL).protocol !== "rediss:") {
+      throw new ConfigValidationError(
+        "Production REDIS_URL must use TLS (rediss://).",
+      );
+    }
+  }
 
   return {
     environment: env.NODE_ENV,
@@ -269,6 +303,8 @@ export function loadAppConfig(
 
     httpSecurity: {
       corsOrigins,
+      rateLimitStore: env.RATE_LIMIT_STORE,
+      redisUrl: env.REDIS_URL,
     },
 
     email: {

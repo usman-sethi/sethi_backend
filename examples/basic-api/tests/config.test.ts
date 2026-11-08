@@ -35,6 +35,8 @@ describe("Application Configuration", () => {
 
       httpSecurity: {
         corsOrigins: ["http://localhost:5173"],
+        rateLimitStore: "memory",
+        redisUrl: undefined,
       },
 
       tokens: {
@@ -64,6 +66,8 @@ describe("Application Configuration", () => {
       SMTP_HOST: "smtp.example.com",
       EMAIL_FROM: "no-reply@example.com",
       APP_BASE_URL: "https://frontend.example",
+      RATE_LIMIT_STORE: "redis",
+      REDIS_URL: "rediss://redis.example.com:6379",
     });
 
     expect(config).toEqual({
@@ -81,6 +85,8 @@ describe("Application Configuration", () => {
 
       httpSecurity: {
         corsOrigins: ["https://frontend.example"],
+        rateLimitStore: "redis",
+        redisUrl: "rediss://redis.example.com:6379",
       },
 
       tokens: {
@@ -114,6 +120,8 @@ describe("Application Configuration", () => {
       SMTP_HOST: "smtp.example.com",
       EMAIL_FROM: "no-reply@example.com",
       APP_BASE_URL: "https://frontend.example",
+      RATE_LIMIT_STORE: "redis",
+      REDIS_URL: "rediss://redis.example.com:6379",
     };
 
     expect(() => loadAppConfig({
@@ -137,6 +145,8 @@ describe("Application Configuration", () => {
       MONGODB_DATABASE: "production_db",
       CORS_ORIGINS: "https://frontend.example",
       JWT_SECRET: productionJwtSecret,
+      RATE_LIMIT_STORE: "redis",
+      REDIS_URL: "rediss://redis.example.com:6379",
     })).toThrow("SMTP_HOST");
   });
 

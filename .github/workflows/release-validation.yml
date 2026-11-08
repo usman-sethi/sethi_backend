@@ -16,6 +16,7 @@ jobs:
     env:
       TEST_MONGODB_URI: mongodb://127.0.0.1:27017/?replicaSet=rs0
       TEST_MONGODB_DATABASE: sethi_ci_integration_test
+      TEST_REDIS_URL: redis://127.0.0.1:6379/0
       SMTP_TEST_ENABLED: "true"
       SMTP_HOST: 127.0.0.1
       SMTP_PORT: "1025"
@@ -45,7 +46,20 @@ jobs:
         run: pnpm test
 
       - name: Start isolated test services
-        run: docker compose -f docker-compose.test.yml up -d --wait mongodb mailpit verdaccio
+        run: docker compose -f docker-compose.test.yml up -d --wait mongodb redis mailpit verdaccio
+
+      - name: Initialize MongoDB replica set
+        run: |
+          docker compose -f docker-compose.test.yml exec -T mongodb mongosh --quiet --host 127.0.0.1 --port 27017 --eval 'rs.initiate({_id: "rs0", members: [{_id: 0, host: "127.0.0.1:27017"}]})'
+          for attempt in $(seq 1 60); do
+            if docker compose -f docker-compose.test.yml exec -T mongodb mongosh --quiet --host 127.0.0.1 --port 27017 --eval 'db.hello().isWritablePrimary' | grep -qx 'true'; then
+              echo "MongoDB replica set rs0 is writable primary."
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "MongoDB replica set did not report isWritablePrimary=true."
+          exit 1
 
       - name: Wait for test service APIs
         run: pnpm test:services:wait
@@ -71,6 +85,22 @@ jobs:
 
       - name: Check diff formatting
         run: git diff --check
+
+      - name: Diagnose failed test services
+        if: failure()
+        run: |
+          echo "Compose status:"
+          docker compose -f docker-compose.test.yml ps -a || true
+          echo "MongoDB container logs:"
+          docker compose -f docker-compose.test.yml logs --no-color mongodb || true
+          echo "MongoDB image architecture:"
+          docker image inspect mongo:8.0 --format '{{.Os}}/{{.Architecture}}' || true
+          echo "Docker host architecture:"
+          docker info --format '{{.Architecture}}' || true
+          echo "GitHub runner architecture: ${{ runner.arch }} ($(uname -m))"
+          echo "AVX availability:"
+          if grep -qm1 -w avx /proc/cpuinfo; then echo "AVX: available"; else echo "AVX: unavailable"; fi
+          if grep -qm1 -w avx2 /proc/cpuinfo; then echo "AVX2: available"; else echo "AVX2: unavailable"; fi
 
       - name: Stop isolated test services
         if: always()

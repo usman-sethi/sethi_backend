@@ -14,7 +14,7 @@ services:
         - --port
         - "27017"
         - --eval
-        - "try { rs.status().ok } catch (error) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: '127.0.0.1:27017' }] }).ok }"
+        - "quit(db.adminCommand({ ping: 1 }).ok === 1 ? 0 : 1)"
       interval: 2s
       timeout: 5s
       retries: 30
@@ -25,6 +25,17 @@ services:
     ports:
       - "127.0.0.1:1025:1025"
       - "127.0.0.1:8025:8025"
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--bind", "0.0.0.0"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
 
   verdaccio:
     image: verdaccio/verdaccio:7.0.2
